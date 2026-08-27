@@ -1,0 +1,1891 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KnowledgeDesk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=Inter:wght@400;450;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ── Design tokens ──────────────────────────────────────────────── */
+:root {
+  --ink:        #16202E;
+  --ink-soft:   #374151;
+  --ink-muted:  #6B7280;
+  --paper:      #F2F4F6;
+  --surface:    #FFFFFF;
+  --border:     #E5E7EB;
+  --border-soft:#F0F0F0;
+  --amber:      #E8A13D;
+  --amber-dim:  #FEF3DC;
+  --green:      #10B981;
+  --green-dim:  #D1FAE5;
+  --red:        #EF4444;
+  --red-dim:    #FEE2E2;
+  --blue:       #3B82F6;
+  --blue-dim:   #DBEAFE;
+  --purple:     #8B5CF6;
+  --purple-dim: #EDE9FE;
+  --sidebar-w:  240px;
+  --header-h:   56px;
+  --radius:     10px;
+  --radius-sm:  6px;
+  --shadow:     0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:  0 4px 12px rgba(0,0,0,.10);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; font-family: 'Inter', sans-serif; background: var(--paper); color: var(--ink); font-size: 14px; line-height: 1.5; }
+
+/* ── Auth shell ─────────────────────────────────────────────────── */
+#auth-shell {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--ink);
+  background-image: radial-gradient(ellipse at 60% 20%, rgba(232,161,61,.15) 0%, transparent 60%);
+}
+.auth-card {
+  background: var(--surface); border-radius: 16px; width: 380px;
+  padding: 40px 36px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
+}
+.auth-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 32px; }
+.auth-logo-mark {
+  width: 36px; height: 36px; border-radius: 8px; background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+}
+.auth-logo-mark svg { width: 20px; height: 20px; }
+.auth-logo-text { font-family: 'Sora', sans-serif; font-weight: 700; font-size: 18px; }
+.auth-logo-text span { color: var(--amber); }
+.auth-title { font-family: 'Sora', sans-serif; font-weight: 600; font-size: 22px; margin-bottom: 6px; }
+.auth-subtitle { color: var(--ink-muted); margin-bottom: 28px; font-size: 13px; }
+.auth-error {
+  background: var(--red-dim); color: var(--red); border-radius: var(--radius-sm);
+  padding: 10px 14px; margin-bottom: 16px; font-size: 13px; display: none;
+}
+.auth-error.show { display: block; }
+.field-label { font-weight: 500; font-size: 13px; margin-bottom: 6px; display: block; }
+.field-input {
+  width: 100%; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; font-size: 14px; font-family: 'Inter', sans-serif;
+  background: var(--paper); color: var(--ink); transition: border .15s;
+  margin-bottom: 16px; outline: none;
+}
+.field-input:focus { border-color: var(--amber); background: #fff; }
+.btn-primary {
+  width: 100%; padding: 11px; background: var(--ink); color: #fff;
+  border: none; border-radius: var(--radius-sm); font-weight: 600; font-size: 14px;
+  cursor: pointer; font-family: 'Sora', sans-serif; transition: opacity .15s;
+}
+.btn-primary:hover { opacity: .85; }
+.btn-primary:disabled { opacity: .5; cursor: default; }
+.auth-hint { margin-top: 20px; text-align: center; font-size: 12px; color: var(--ink-muted); }
+.auth-hint code {
+  background: var(--paper); border-radius: 4px; padding: 1px 5px;
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+}
+
+/* ── Force-change password ──────────────────────────────────────── */
+#force-pw-shell {
+  display: none; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--ink);
+}
+
+/* ── App shell ──────────────────────────────────────────────────── */
+#app-shell { display: none; height: 100vh; flex-direction: column; }
+
+/* ── Top header ─────────────────────────────────────────────────── */
+.top-header {
+  height: var(--header-h); background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; padding: 0 20px; gap: 12px; flex-shrink: 0;
+  box-shadow: var(--shadow);
+}
+.header-logo { font-family: 'Sora', sans-serif; font-weight: 700; font-size: 16px; }
+.header-logo span { color: var(--amber); }
+.header-workspace {
+  background: var(--paper); border-radius: 20px; padding: 4px 12px;
+  font-size: 12px; font-weight: 500; color: var(--ink-soft); border: 1px solid var(--border);
+}
+.header-spacer { flex: 1; }
+.header-user {
+  display: flex; align-items: center; gap: 8px; font-size: 13px;
+  color: var(--ink-soft); cursor: pointer; position: relative;
+}
+.header-avatar {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 12px; font-weight: 600; font-family: 'Sora', sans-serif;
+}
+.role-badge {
+  padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .03em;
+}
+.role-badge.superadmin { background: var(--purple-dim); color: var(--purple); }
+.role-badge.tenant_admin { background: var(--amber-dim); color: #92580A; }
+.role-badge.member { background: var(--green-dim); color: #047857; }
+.role-badge.service { background: var(--blue-dim); color: var(--blue); }
+
+/* user dropdown */
+.user-dropdown {
+  position: absolute; top: calc(100% + 8px); right: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-md);
+  min-width: 200px; display: none; z-index: 999;
+}
+.user-dropdown.open { display: block; }
+.user-dropdown-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.user-dropdown-header .name { font-weight: 600; font-size: 13px; }
+.user-dropdown-header .email { color: var(--ink-muted); font-size: 12px; }
+.dropdown-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; cursor: pointer; color: var(--ink-soft);
+  font-size: 13px; transition: background .1s;
+}
+.dropdown-item:hover { background: var(--paper); }
+.dropdown-item.danger { color: var(--red); }
+
+/* ── Main body ──────────────────────────────────────────────────── */
+.app-body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ─────────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w); background: var(--surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto;
+}
+.sidebar-section-label {
+  padding: 20px 16px 6px; font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--ink-muted);
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 16px;
+  cursor: pointer; color: var(--ink-soft); border-radius: 0;
+  font-size: 13px; font-weight: 500; transition: background .1s, color .1s;
+  margin: 1px 8px; border-radius: 6px;
+  width: calc(100% - 16px); border: 0; background: transparent;
+  text-align: left; font-family: 'Inter', sans-serif; position: relative; z-index: 5;
+  pointer-events: auto; -webkit-tap-highlight-color: transparent;
+}
+.nav-item:hover { background: var(--paper); color: var(--ink); }
+.nav-item.active { background: var(--ink); color: #fff; }
+.nav-item.active svg { color: #fff; }
+.nav-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+.sidebar-footer { margin-top: auto; padding: 16px; border-top: 1px solid var(--border); }
+.health-dot { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink-muted); margin-bottom: 4px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+.dot.green { background: var(--green); }
+.dot.red { background: var(--red); }
+.dot.amber { background: var(--amber); }
+
+/* ── Content area ────────────────────────────────────────────────── */
+.content { flex: 1; overflow-y: auto; padding: 32px; background: var(--paper); }
+.page { display: none; }
+.page.active { display: block; }
+.page-title { font-family: 'Sora', sans-serif; font-weight: 700; font-size: 24px; margin-bottom: 4px; }
+.page-subtitle { color: var(--ink-muted); font-size: 13px; margin-bottom: 28px; }
+
+/* ── Cards ───────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 24px; box-shadow: var(--shadow);
+}
+.card-title { font-family: 'Sora', sans-serif; font-weight: 600; font-size: 15px; margin-bottom: 16px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 16px; margin-bottom: 24px; }
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow);
+}
+.stat-val { font-family: 'Sora', sans-serif; font-weight: 700; font-size: 28px; }
+.stat-label { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
+
+/* ── Ask page ────────────────────────────────────────────────────── */
+.ask-shell { display: flex; flex-direction: column; height: 100%; max-width: 820px; }
+.chat-area { flex: 1; overflow-y: auto; padding-bottom: 16px; }
+.quick-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.chip {
+  padding: 7px 14px; border: 1.5px solid var(--border); border-radius: 20px;
+  font-size: 12px; cursor: pointer; color: var(--ink-soft); transition: all .15s; background: var(--surface);
+}
+.chip:hover { border-color: var(--amber); color: var(--ink); background: var(--amber-dim); }
+.msg { margin-bottom: 20px; }
+.msg-label { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--ink-muted); margin-bottom: 6px; }
+.msg-user .msg-body {
+  background: var(--ink); color: #fff; border-radius: 12px 12px 4px 12px;
+  padding: 10px 16px; display: inline-block; max-width: 85%; font-size: 14px;
+}
+.msg-ai .msg-body {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 3px solid var(--amber); border-radius: 4px 12px 12px 12px;
+  padding: 14px 18px; font-size: 14px; line-height: 1.65;
+}
+.msg-ai .msg-body.not-found { border-left-color: var(--red); }
+.sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.source-chip {
+  background: var(--amber-dim); border: 1px solid var(--amber); color: #92580A;
+  border-radius: 4px; font-size: 11px; padding: 3px 9px; cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+}
+.source-panel {
+  background: var(--paper); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 12px 14px; margin-top: 8px;
+  font-size: 12px; color: var(--ink-soft); display: none; line-height: 1.6;
+}
+.source-panel.open { display: block; }
+.confidence { font-size: 11px; color: var(--ink-muted); margin-top: 8px; }
+.confidence span { font-weight: 600; }
+.feedback-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--ink-muted); }
+.fb-btn { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; cursor: pointer; font-size: 13px; }
+.fb-btn:hover { background: var(--paper); }
+.typing-dots { display: inline-flex; gap: 4px; align-items: center; }
+.typing-dots span { width: 6px; height: 6px; background: var(--ink-muted); border-radius: 50%; animation: dot .9s infinite; }
+.typing-dots span:nth-child(2) { animation-delay: .15s; }
+.typing-dots span:nth-child(3) { animation-delay: .3s; }
+@keyframes dot { 0%,80%,100%{opacity:.2;transform:scale(.8)} 40%{opacity:1;transform:scale(1)} }
+.input-row {
+  display: flex; gap: 10px; padding: 16px 0 0; border-top: 1px solid var(--border); margin-top: auto;
+}
+.ask-input {
+  flex: 1; border: 1.5px solid var(--border); border-radius: var(--radius);
+  padding: 12px 16px; font-size: 14px; font-family: 'Inter', sans-serif;
+  background: var(--surface); color: var(--ink); resize: none; outline: none; transition: border .15s;
+}
+.ask-input:focus { border-color: var(--amber); }
+.ask-btn {
+  padding: 0 22px; background: var(--ink); color: #fff; border: none;
+  border-radius: var(--radius); font-weight: 600; font-size: 14px;
+  cursor: pointer; font-family: 'Sora', sans-serif;
+}
+.ask-btn:disabled { opacity: .4; cursor: default; }
+
+
+.query-row { padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+.query-row:last-child { border-bottom: 0; }
+.tag-pill { display:inline-block; border:1px solid var(--border); background:var(--paper); border-radius:20px; padding:3px 9px; font-size:11px; color:var(--ink-soft); }
+
+/* ── Documents page ──────────────────────────────────────────────── */
+.upload-zone {
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  padding: 36px; text-align: center; cursor: pointer; transition: all .2s;
+  background: var(--surface); margin-bottom: 24px;
+}
+.upload-zone.drag { border-color: var(--amber); background: var(--amber-dim); }
+.upload-zone h3 { font-family: 'Sora', sans-serif; font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+.upload-zone p { color: var(--ink-muted); font-size: 13px; }
+.upload-btn-sm {
+  display: inline-block; margin-top: 14px; padding: 8px 20px;
+  background: var(--ink); color: #fff; border-radius: var(--radius-sm);
+  font-weight: 600; font-size: 13px; cursor: pointer; font-family: 'Sora', sans-serif;
+}
+.doc-list { display: flex; flex-direction: column; gap: 8px; }
+.doc-row {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 18px;
+  display: flex; align-items: center; gap: 14px; transition: box-shadow .15s;
+}
+.doc-row:hover { box-shadow: var(--shadow-md); }
+.doc-name { font-weight: 500; font-size: 13px; flex: 1; }
+.doc-meta { font-size: 11px; color: var(--ink-muted); }
+.status-pill {
+  padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
+}
+.status-pill.ready { background: var(--green-dim); color: #047857; }
+.status-pill.queued, .status-pill.processing { background: var(--amber-dim); color: #92580A; }
+.status-pill.failed { background: var(--red-dim); color: var(--red); }
+.del-btn {
+  background: none; border: none; cursor: pointer; color: var(--ink-muted); padding: 4px;
+  border-radius: 4px; transition: color .15s;
+}
+.del-btn:hover { color: var(--red); }
+
+/* ── Table ───────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 10px 14px; color: var(--ink-muted); font-size: 11px;
+     font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+     border-bottom: 1px solid var(--border); background: var(--paper); }
+td { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: var(--paper); }
+
+/* ── Modals ──────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  display: none; align-items: center; justify-content: center; z-index: 9000;
+}
+.modal-overlay.open { display: flex; }
+.modal {
+  background: var(--surface); border-radius: 14px; width: 440px;
+  max-width: 96vw; padding: 28px; box-shadow: 0 20px 60px rgba(0,0,0,.25);
+}
+.modal-title { font-family: 'Sora', sans-serif; font-weight: 700; font-size: 18px; margin-bottom: 20px; }
+.modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+.btn-sm {
+  padding: 8px 18px; border-radius: var(--radius-sm); font-size: 13px;
+  font-weight: 600; cursor: pointer; border: none; font-family: 'Sora', sans-serif;
+}
+.btn-primary-sm { background: var(--ink); color: #fff; }
+.btn-primary-sm:hover { opacity: .85; }
+.btn-secondary { background: var(--paper); color: var(--ink-soft); border: 1px solid var(--border); }
+.btn-secondary:hover { background: var(--border); }
+.btn-danger { background: var(--red); color: #fff; }
+.btn-danger:hover { opacity: .85; }
+
+/* ── Form fields in modals ───────────────────────────────────────── */
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--ink-soft); }
+.form-group input, .form-group select {
+  width: 100%; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  padding: 9px 12px; font-size: 13px; font-family: 'Inter', sans-serif;
+  background: var(--paper); color: var(--ink); outline: none;
+}
+.form-group input:focus, .form-group select:focus { border-color: var(--amber); }
+.temp-pw-box {
+  background: var(--amber-dim); border: 1px solid var(--amber);
+  border-radius: var(--radius-sm); padding: 12px; margin-top: 12px;
+  font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #92580A;
+}
+
+/* ── Toast ────────────────────────────────────────────────────────── */
+#toast {
+  position: fixed; bottom: 24px; right: 24px; background: var(--ink);
+  color: #fff; padding: 12px 20px; border-radius: var(--radius);
+  font-size: 13px; font-weight: 500; box-shadow: var(--shadow-md);
+  transform: translateY(80px); opacity: 0; transition: all .3s; z-index: 9999;
+}
+#toast.show { transform: translateY(0); opacity: 1; }
+#toast.error { background: var(--red); }
+#toast.success { background: var(--green); }
+
+/* ── Insights ─────────────────────────────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media(max-width:800px){ .two-col{grid-template-columns:1fr;} }
+
+/* ── Superadmin platform ─────────────────────────────────────────── */
+.platform-badge {
+  background: var(--purple-dim); color: var(--purple);
+  border-radius: 6px; padding: 4px 12px; font-size: 12px; font-weight: 600;
+  display: inline-block; margin-bottom: 20px;
+}
+
+/* ── User management ─────────────────────────────────────────────── */
+.action-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.search-input {
+  flex: 1; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 12px; font-size: 13px; font-family: 'Inter', sans-serif; outline: none;
+  background: var(--surface);
+}
+.search-input:focus { border-color: var(--amber); }
+.btn-outline {
+  padding: 8px 16px; border: 1.5px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink-soft); font-size: 13px; font-weight: 500;
+  cursor: pointer; font-family: 'Inter', sans-serif;
+}
+.btn-outline:hover { border-color: var(--ink); color: var(--ink); }
+.btn-accent {
+  padding: 8px 16px; border: none; border-radius: var(--radius-sm);
+  background: var(--ink); color: #fff; font-size: 13px; font-weight: 600;
+  cursor: pointer; font-family: 'Sora', sans-serif;
+}
+.btn-accent:hover { opacity: .85; }
+
+/* ── Change password page ────────────────────────────────────────── */
+.change-pw-card { max-width: 420px; }
+
+/* ── Scrollbars ──────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ── Login ─────────────────────────────────────────────────────── -->
+<div id="auth-shell">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="auth-logo-mark">
+        <svg viewBox="0 0 20 20" fill="none" stroke="#E8A13D" stroke-width="1.8">
+          <circle cx="10" cy="10" r="7"/>
+          <path d="M7 10h6M10 7v6"/>
+        </svg>
+      </div>
+      <div class="auth-logo-text">Knowledge<span>Desk</span></div>
+    </div>
+    <div class="auth-title">Sign in to your workspace</div>
+    <div class="auth-subtitle">Enter your credentials to continue.</div>
+    <div class="auth-error" id="login-err"></div>
+    <label class="field-label" for="li-email">Work email</label>
+    <input class="field-input" id="li-email" type="email" placeholder="you@company.com" autocomplete="email">
+    <label class="field-label" for="li-pw">Password</label>
+    <input class="field-input" id="li-pw" type="password" placeholder="••••••••••" autocomplete="current-password">
+    <button class="btn-primary" id="li-btn" onclick="doLogin()">Sign in</button>
+    <div class="auth-hint">
+      Demo: <code>admin@demo.knowledgedesk.local</code> / <code>Demo-Admin123!</code><br>
+      Platform: <code>superadmin@knowledgedesk.local</code>
+    </div>
+  </div>
+</div>
+
+<!-- ── Force password change ────────────────────────────────────── -->
+<div id="force-pw-shell" style="display:none;align-items:center;justify-content:center;min-height:100vh;background:var(--ink);">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div class="auth-logo-mark">
+        <svg viewBox="0 0 20 20" fill="none" stroke="#E8A13D" stroke-width="1.8">
+          <circle cx="10" cy="10" r="7"/><path d="M7 10h6M10 7v6"/>
+        </svg>
+      </div>
+      <div class="auth-logo-text">Knowledge<span>Desk</span></div>
+    </div>
+    <div class="auth-title">Set a new password</div>
+    <div class="auth-subtitle">Your account requires a password change before continuing.</div>
+    <div class="auth-error" id="fpw-err"></div>
+    <label class="field-label">Current password</label>
+    <input class="field-input" id="fpw-cur" type="password" placeholder="Current password">
+    <label class="field-label">New password</label>
+    <input class="field-input" id="fpw-new" type="password" placeholder="Min 10 characters">
+    <label class="field-label">Confirm new password</label>
+    <input class="field-input" id="fpw-con" type="password" placeholder="Repeat new password">
+    <button class="btn-primary" onclick="doForceChangePw()">Set password &amp; continue</button>
+  </div>
+</div>
+
+<!-- ── App shell ─────────────────────────────────────────────────── -->
+<div id="app-shell">
+  <!-- Header -->
+  <div class="top-header">
+    <div class="header-logo">Knowledge<span style="color:var(--amber)">Desk</span></div>
+    <div class="header-workspace" id="hdr-workspace" style="display:none"></div>
+    <div class="header-spacer"></div>
+    <!-- health dots -->
+    <div class="health-dot" style="margin-right:8px">
+      <div class="dot" id="hd-qdrant"></div><span style="font-size:11px;color:var(--ink-muted)">Index</span>
+      <div class="dot" style="margin-left:10px" id="hd-llm"></div><span style="font-size:11px;color:var(--ink-muted)" id="hd-llm-label">LLM</span>
+    </div>
+    <!-- user menu -->
+    <div class="header-user" id="hdr-user" onclick="toggleDropdown(event)">
+      <div class="header-avatar" id="hdr-avatar">?</div>
+      <span id="hdr-name" style="font-weight:500;font-size:13px"></span>
+      <span class="role-badge" id="hdr-role-badge"></span>
+      <div class="user-dropdown" id="user-dropdown">
+        <div class="user-dropdown-header">
+          <div class="name" id="dd-name"></div>
+          <div class="email" id="dd-email"></div>
+        </div>
+        <div class="dropdown-item" data-page="change-pw">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+          Change password
+        </div>
+        <div class="dropdown-item danger" onclick="doLogout()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+          Sign out
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div class="app-body">
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar">
+      <!-- Nav items injected by JS based on role -->
+    </nav>
+
+    <!-- Content -->
+    <div class="content" id="content">
+
+      <!-- ── Ask ──────────────────────────────────────────────────── -->
+      <div class="page" id="page-ask">
+        <div class="ask-shell">
+          <div class="chat-area" id="chat-area">
+            <div class="quick-chips" id="quick-chips">
+              <div class="chip" onclick="sendQ(this.textContent)">What is the refund policy for enterprise clients?</div>
+              <div class="chip" onclick="sendQ(this.textContent)">How many leave days do new employees get?</div>
+              <div class="chip" onclick="sendQ(this.textContent)">What is the laptop reimbursement limit?</div>
+              <div class="chip" onclick="sendQ(this.textContent)">Who approves expenses above ₹50,000?</div>
+            </div>
+          </div>
+          <div class="input-row">
+            <textarea class="ask-input" id="ask-input" rows="1" placeholder="Ask a question about your company documents… (Enter to send)"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAsk();}"></textarea>
+            <button class="ask-btn" id="ask-btn" onclick="sendAsk()">Ask</button>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ── History ──────────────────────────────────────────────── -->
+      <div class="page" id="page-history">
+        <div class="page-title">History</div>
+        <div class="page-subtitle">Recent questions asked in this workspace, with answer mode, confidence, and latency.</div>
+        <div class="card">
+          <div class="card-title">Query history</div>
+          <div id="history-list" style="max-height:520px;overflow-y:auto">
+            <div style="color:var(--ink-muted);font-size:13px">Open this page to load query history…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Documents ────────────────────────────────────────────── -->
+      <div class="page" id="page-documents">
+        <div class="page-title">Documents</div>
+        <div class="page-subtitle">Upload files to build your knowledge base. Supported: PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, HTML, ZIP bulk archives.</div>
+        <div class="upload-zone" id="drop-zone" ondragover="event.preventDefault();this.classList.add('drag')"
+             ondragleave="this.classList.remove('drag')" ondrop="handleDrop(event)">
+          <h3>Drop files here</h3>
+          <p>PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, HTML, or a ZIP export — up to 50 MB each</p>
+          <label class="upload-btn-sm">Browse files
+            <input type="file" id="file-input" multiple style="display:none"
+                   accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.html,.json,.zip"
+                   onchange="handleFiles(this.files)">
+          </label>
+        </div>
+        <div id="doc-actions" style="display:flex;gap:10px;margin-bottom:16px">
+          <button class="btn-outline" onclick="seedDocs()">⚡ Load sample documents</button>
+        </div>
+        <div class="doc-list" id="doc-list">
+          <div style="color:var(--ink-muted);font-size:13px;padding:20px 0">Loading documents…</div>
+        </div>
+      </div>
+
+
+      <!-- ── Collections ──────────────────────────────────────────── -->
+      <div class="page" id="page-collections">
+        <div class="page-title">Collections</div>
+        <div class="page-subtitle">Organize documents into logical knowledge areas. This demo groups currently indexed documents by source.</div>
+        <div class="card">
+          <div class="card-title">Workspace collections</div>
+          <div id="collections-list" style="max-height:520px;overflow-y:auto">
+            <div style="color:var(--ink-muted);font-size:13px">Open this page to load collections…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Insights ─────────────────────────────────────────────── -->
+      <div class="page" id="page-insights">
+        <div class="page-title">Insights</div>
+        <div class="page-subtitle">Usage analytics and knowledge gap intelligence.</div>
+        <div class="stat-grid" id="stat-grid">
+          <div class="stat-card"><div class="stat-val" id="s-docs">–</div><div class="stat-label">Documents indexed</div></div>
+          <div class="stat-card"><div class="stat-val" id="s-queries">–</div><div class="stat-label">Total queries</div></div>
+          <div class="stat-card"><div class="stat-val" id="s-answered">–</div><div class="stat-label">Answered</div></div>
+          <div class="stat-card"><div class="stat-val" id="s-gaps">–</div><div class="stat-label">Knowledge gaps</div></div>
+          <div class="stat-card"><div class="stat-val" id="s-helpful">–</div><div class="stat-label">👍 Helpful</div></div>
+          <div class="stat-card"><div class="stat-val" id="s-latency">–</div><div class="stat-label">Avg latency (ms)</div></div>
+        </div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-title">Recent queries</div>
+            <div id="q-log" style="max-height:340px;overflow-y:auto">
+              <div style="color:var(--ink-muted);font-size:13px">Loading…</div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Knowledge gaps <span style="background:var(--red-dim);color:var(--red);font-size:11px;padding:2px 8px;border-radius:20px;margin-left:6px" id="gap-count-badge">0</span></div>
+            <div id="gap-list" style="max-height:340px;overflow-y:auto">
+              <div style="color:var(--ink-muted);font-size:13px">Loading…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- ── Webhooks (tenant admin) ──────────────────────────────── -->
+      <div class="page" id="page-webhooks">
+        <div class="page-title">Webhooks</div>
+        <div class="page-subtitle">Configure outbound notifications for ingestion, document lifecycle, and query events.</div>
+        <div class="card">
+          <div class="card-title">Webhook endpoints</div>
+          <div id="webhooks-list" style="max-height:520px;overflow-y:auto">
+            <div style="color:var(--ink-muted);font-size:13px">Webhook management UI is enabled. Add live endpoint CRUD in production integrations.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Audit log (tenant admin) ─────────────────────────────── -->
+      <div class="page" id="page-audit">
+        <div class="page-title">Audit Log</div>
+        <div class="page-subtitle">Every security-relevant action in your workspace.</div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+            <tbody id="audit-body"><tr><td colspan="4" style="color:var(--ink-muted);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Users (tenant admin) ─────────────────────────────────── -->
+      <div class="page" id="page-users">
+        <div class="page-title">Users</div>
+        <div class="page-subtitle">Manage workspace members and admins.</div>
+        <div class="action-bar">
+          <input class="search-input" id="user-search" placeholder="Search by name or email…" oninput="filterUsers()">
+          <button class="btn-accent" onclick="openCreateUser()">+ Add user</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+            <tbody id="users-body"><tr><td colspan="6" style="color:var(--ink-muted);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Connectors (tenant admin) ────────────────────────────── -->
+      <div class="page" id="page-connectors">
+        <div class="page-title">Connectors</div>
+        <div class="page-subtitle">Sync documents from Google Drive and SharePoint.</div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-title">Google Drive</div>
+            <p style="font-size:13px;color:var(--ink-muted);margin-bottom:16px">Sync documents from a shared Drive folder. Configure GDRIVE_ACCESS_TOKEN and GDRIVE_FOLDER_ID in .env.</p>
+            <button class="btn-accent" onclick="syncConnector('gdrive')">Sync now</button>
+          </div>
+          <div class="card">
+            <div class="card-title">SharePoint</div>
+            <p style="font-size:13px;color:var(--ink-muted);margin-bottom:16px">Sync from a SharePoint document library. Configure MSGRAPH_* credentials in .env.</p>
+            <button class="btn-accent" onclick="syncConnector('sharepoint')">Sync now</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Settings (tenant admin) ───────────────────────────────── -->
+      <div class="page" id="page-settings">
+        <div class="page-title">Workspace settings</div>
+        <div class="page-subtitle">Choose the embedding, reranker and generation models for this workspace.</div>
+        <div class="two-col">
+          <div class="card">
+            <div class="card-title">Tenant model profile</div>
+            <div class="form-group">
+              <label>Quality / cost profile</label>
+              <select id="set-profile" onchange="applySelectedProfileDefaults()"></select>
+            </div>
+            <div id="profile-description" style="font-size:12px;color:var(--ink-muted);line-height:1.5;margin-bottom:16px"></div>
+
+            <div class="form-group">
+              <label>Embedding model</label>
+              <select id="set-embedding-model" onchange="updateModelWarning()"></select>
+            </div>
+            <div class="form-group">
+              <label>Generation model</label>
+              <select id="set-llm-model" onchange="updateModelWarning()"></select>
+            </div>
+            <div class="form-group">
+              <label>Reranker model</label>
+              <select id="set-reranker-model" onchange="updateModelWarning()"></select>
+            </div>
+            <div class="form-group" style="display:flex;align-items:center;gap:8px">
+              <input type="checkbox" id="set-reranker-enabled" onchange="updateModelWarning()" style="width:auto">
+              <label for="set-reranker-enabled" style="margin:0">Enable reranker</label>
+            </div>
+            <div id="model-warning" style="display:none;background:var(--amber-dim);border:1px solid var(--amber);border-radius:8px;padding:12px;font-size:12px;color:#92580A;margin-bottom:16px"></div>
+            <div id="reindex-warning" style="display:none;background:var(--amber-dim);border:1px solid var(--amber);border-radius:8px;padding:12px;font-size:12px;color:#92580A;margin-bottom:16px"></div>
+            <button class="btn-accent" onclick="saveSettings()">Save tenant model settings</button>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Advanced retrieval settings</div>
+            <div class="form-group">
+              <label>Retrieval pool Top-K</label>
+              <input type="number" id="set-topk" min="1" max="80" value="32">
+            </div>
+            <div class="form-group">
+              <label>Final reranked chunks</label>
+              <input type="number" id="set-rerank-topk" min="1" max="20" value="8">
+            </div>
+            <div class="form-group">
+              <label>Score threshold (0–1)</label>
+              <input type="number" id="set-threshold" step="0.01" min="0" max="1" value="0.25">
+            </div>
+            <div class="form-group">
+              <label>Max context characters</label>
+              <input type="number" id="set-context" min="3000" max="64000" value="12000">
+            </div>
+            <div class="form-group">
+              <label>LLM max tokens</label>
+              <input type="number" id="set-max-tokens" min="100" max="4000" value="900">
+            </div>
+            <div class="form-group">
+              <label>Temperature</label>
+              <input type="number" id="set-temp" step="0.05" min="0" max="1" value="0.10">
+            </div>
+            <div id="settings-config" style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border)">
+              <div class="card-title" style="font-size:13px">Effective configuration</div>
+              <div id="config-details" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--ink-soft);line-height:1.8"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Change password ────────────────────────────────────────── -->
+      <div class="page" id="page-change-pw">
+        <div class="page-title">Change password</div>
+        <div class="page-subtitle">Update your account password.</div>
+        <div class="card change-pw-card">
+          <div class="auth-error" id="cpw-err"></div>
+          <div class="form-group">
+            <label>Current password</label>
+            <input type="password" id="cpw-cur" placeholder="Current password">
+          </div>
+          <div class="form-group">
+            <label>New password</label>
+            <input type="password" id="cpw-new" placeholder="Min 10 characters">
+          </div>
+          <div class="form-group">
+            <label>Confirm new password</label>
+            <input type="password" id="cpw-con" placeholder="Repeat new password">
+          </div>
+          <button class="btn-accent" onclick="doChangePw()">Update password</button>
+        </div>
+      </div>
+
+      <!-- ── Superadmin: Tenants ──────────────────────────────────── -->
+      <div class="page" id="page-sa-tenants">
+        <div class="platform-badge">⚙ Platform Admin</div>
+        <div class="page-title">Workspaces</div>
+        <div class="page-subtitle">Create and manage customer tenants.</div>
+        <div class="action-bar">
+          <div style="flex:1"></div>
+          <button class="btn-accent" onclick="openCreateTenant()">+ New workspace</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th>Name</th><th>Slug</th><th>Users</th><th>Docs</th><th>API key</th><th>Created</th><th></th></tr></thead>
+            <tbody id="sa-tenants-body"><tr><td colspan="7" style="color:var(--ink-muted);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Superadmin: Platform Users ──────────────────────────── -->
+      <div class="page" id="page-sa-users">
+        <div class="platform-badge">⚙ Platform Admin</div>
+        <div class="page-title">All users</div>
+        <div class="page-subtitle">Platform-wide user management. Select a workspace to view its users.</div>
+        <div class="action-bar">
+          <select id="sa-tenant-filter" class="search-input" style="max-width:260px" onchange="loadSAUsers()">
+            <option value="">All workspaces</option>
+          </select>
+          <button class="btn-accent" onclick="openCreateUser(true)">+ Add user</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Workspace</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+          <tbody id="sa-users-body"><tr><td colspan="7" style="color:var(--ink-muted);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Superadmin: Audit ────────────────────────────────────── -->
+      <div class="page" id="page-sa-audit">
+        <div class="platform-badge">⚙ Platform Admin</div>
+        <div class="page-title">Platform audit log</div>
+        <div class="page-subtitle">Every auth and lifecycle event across all workspaces.</div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th>Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Detail</th></tr></thead>
+            <tbody id="sa-audit-body"><tr><td colspan="5" style="color:var(--ink-muted);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Superadmin: Platform stats ──────────────────────────── -->
+      <div class="page" id="page-sa-stats">
+        <div class="platform-badge">⚙ Platform Admin</div>
+        <div class="page-title">Platform overview</div>
+        <div class="page-subtitle">Aggregate metrics across all customer workspaces.</div>
+        <div class="stat-grid" id="sa-stat-grid">
+          <div class="stat-card"><div class="stat-val" id="sa-s-tenants">–</div><div class="stat-label">Workspaces</div></div>
+          <div class="stat-card"><div class="stat-val" id="sa-s-users">–</div><div class="stat-label">Total users</div></div>
+          <div class="stat-card"><div class="stat-val" id="sa-s-docs">–</div><div class="stat-label">Documents</div></div>
+          <div class="stat-card"><div class="stat-val" id="sa-s-queries">–</div><div class="stat-label">Queries</div></div>
+        </div>
+      </div>
+
+    </div><!-- /content -->
+  </div><!-- /app-body -->
+</div><!-- /app-shell -->
+
+<!-- ── Modals ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-create-user">
+  <div class="modal">
+    <div class="modal-title">Add user</div>
+    <div class="form-group"><label>Full name</label><input type="text" id="cu-name" placeholder="Jane Smith"></div>
+    <div class="form-group"><label>Work email</label><input type="email" id="cu-email" placeholder="jane@company.com"></div>
+    <div class="form-group"><label>Role</label>
+      <select id="cu-role">
+        <option value="member">Member (can ask questions)</option>
+        <option value="tenant_admin">Workspace Admin (full access)</option>
+      </select>
+    </div>
+    <div class="form-group" id="cu-tenant-group" style="display:none">
+      <label>Workspace</label>
+      <select id="cu-tenant-slug"></select>
+    </div>
+    <div class="form-group"><label>Password (leave blank to auto-generate)</label><input type="password" id="cu-pw" placeholder="Optional — auto-generated if blank"></div>
+    <div id="cu-result" style="display:none" class="temp-pw-box"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-secondary" onclick="closeModal('modal-create-user')">Cancel</button>
+      <button class="btn-sm btn-primary-sm" onclick="submitCreateUser()">Create user</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-create-tenant">
+  <div class="modal">
+    <div class="modal-title">New workspace</div>
+    <div class="form-group"><label>Company name</label><input type="text" id="ct-name" placeholder="Acme Technologies"></div>
+    <div class="form-group"><label>Slug (URL-safe identifier)</label><input type="text" id="ct-slug" placeholder="acme-technologies"></div>
+    <div id="ct-result" style="display:none" class="temp-pw-box"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-secondary" onclick="closeModal('modal-create-tenant')">Cancel</button>
+      <button class="btn-sm btn-primary-sm" onclick="submitCreateTenant()">Create workspace</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-reset-pw">
+  <div class="modal">
+    <div class="modal-title">Reset password</div>
+    <p style="font-size:13px;color:var(--ink-soft);margin-bottom:16px">A temporary password will be generated. The user must change it on next sign-in.</p>
+    <div id="rp-result" style="display:none" class="temp-pw-box"></div>
+    <div class="modal-footer" id="rp-footer">
+      <button class="btn-sm btn-secondary" onclick="closeModal('modal-reset-pw')">Cancel</button>
+      <button class="btn-sm btn-danger" onclick="submitResetPw()">Reset password</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────
+let ACCESS = localStorage.getItem('kd_access') || '';
+let REFRESH = localStorage.getItem('kd_refresh') || '';
+let ME = JSON.parse(localStorage.getItem('kd_me') || 'null');
+let currentPage = '';
+let allUsers = [];
+let _resetTarget = null;
+let _superadminFlow = false;
+let healthInterval;
+
+// ── Browser routing ───────────────────────────────────────────────
+// Every page is still part of this fast single-file UI, but these mappings
+// make sidebar navigation, refreshes, bookmarks and direct links work.
+const PAGE_PATHS = {
+  'ask': '/ask',
+  'history': '/history',
+  'documents': '/documents',
+  'collections': '/collections',
+  'insights': '/insights',
+  'audit': '/audit',
+  'users': '/users',
+  'webhooks': '/webhooks',
+  'connectors': '/connectors',
+  'settings': '/settings',
+  'change-pw': '/change-password',
+  'sa-stats': '/platform/overview',
+  'sa-tenants': '/platform/workspaces',
+  'sa-users': '/platform/users',
+  'sa-audit': '/platform/audit',
+};
+const PATH_PAGES = Object.fromEntries(Object.entries(PAGE_PATHS).map(([page, path]) => [path, page]));
+
+function defaultPageForRole(role) {
+  return role === 'superadmin' ? 'sa-stats' : 'ask';
+}
+function allowedPagesForRole(role) {
+  const common = ['change-pw'];
+  if (role === 'superadmin') return ['sa-stats','sa-tenants','sa-users','sa-audit', ...common];
+  const member = ['ask','history','documents','collections','insights'];
+  if (role === 'tenant_admin') return [...member, 'users','webhooks','audit','connectors','settings', ...common];
+  return [...member, ...common];
+}
+function pageFromLocationForRole(role) {
+  const hashPage = window.location.hash ? window.location.hash.replace(/^#\/?/, '') : '';
+  const normalized = (window.location.pathname.replace(/\/+$/, '') || '/');
+  // Prefer hash routes because they never trigger a server round trip and they
+  // work even if the app is reverse-proxied under a non-root path. Path routes
+  // are still supported for previously shared /documents, /ask, etc. links.
+  let page = (hashPage && PAGE_PATHS[hashPage] ? hashPage : '')
+             || PATH_PAGES[normalized]
+             || PATH_PAGES['/' + normalized.split('/').filter(Boolean).join('/')]
+             || defaultPageForRole(role);
+  if (!allowedPagesForRole(role).includes(page)) page = defaultPageForRole(role);
+  return page;
+}
+function updateBrowserUrl(page, replace) {
+  const targetHash = '#' + page;
+  if (window.location.hash === targetHash) return;
+  const fn = replace ? 'replaceState' : 'pushState';
+  // Hash routing avoids reloads and makes repeated page switching reliable in
+  // Docker demos, static hosting, and reverse-proxy deployments.
+  window.history[fn]({page}, '', targetHash);
+}
+
+// ── API helper ────────────────────────────────────────────────────
+async function api(method, path, body, stream) {
+  const headers = {'Content-Type': 'application/json'};
+  if (ACCESS) headers['Authorization'] = 'Bearer ' + ACCESS;
+  const opts = {method, headers};
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (r.status === 401) { doLogout(); return null; }
+  if (stream) return r;
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || r.statusText);
+  return data;
+}
+
+// ── Auth ──────────────────────────────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById('li-email').value.trim();
+  const pw = document.getElementById('li-pw').value;
+  const err = document.getElementById('login-err');
+  const btn = document.getElementById('li-btn');
+  err.classList.remove('show');
+  btn.disabled = true; btn.textContent = 'Signing in…';
+  try {
+    const data = await fetch('/api/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email, password: pw})
+    });
+    const res = await data.json();
+    if (!data.ok) { err.textContent = res.detail || 'Sign-in failed'; err.classList.add('show'); return; }
+    setSession(res);
+    if (res.user.force_password_change) { showForcePw(); return; }
+    bootApp();
+  } catch(e) {
+    err.textContent = e.message; err.classList.add('show');
+  } finally { btn.disabled = false; btn.textContent = 'Sign in'; }
+}
+document.getElementById('li-pw').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+
+function setSession(res) {
+  ACCESS = res.access_token; REFRESH = res.refresh_token; ME = res.user;
+  localStorage.setItem('kd_access', ACCESS);
+  localStorage.setItem('kd_refresh', REFRESH);
+  localStorage.setItem('kd_me', JSON.stringify(ME));
+}
+
+function showForcePw() {
+  document.getElementById('auth-shell').style.display = 'none';
+  document.getElementById('force-pw-shell').style.display = 'flex';
+}
+
+async function doForceChangePw() {
+  const cur = document.getElementById('fpw-cur').value;
+  const nw = document.getElementById('fpw-new').value;
+  const con = document.getElementById('fpw-con').value;
+  const err = document.getElementById('fpw-err');
+  err.classList.remove('show');
+  if (nw !== con) { err.textContent = 'Passwords do not match'; err.classList.add('show'); return; }
+  try {
+    await api('POST', '/api/auth/change-password', {current_password: cur, new_password: nw});
+    // Re-login to get fresh tokens
+    const r = await fetch('/api/auth/login', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({email: ME.email, password: nw})
+    });
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.detail);
+    setSession(res);
+    document.getElementById('force-pw-shell').style.display = 'none';
+    bootApp();
+  } catch(e) { err.textContent = e.message; err.classList.add('show'); }
+}
+
+async function doLogout() {
+  if (REFRESH) {
+    fetch('/api/auth/logout', {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+ACCESS}, body: JSON.stringify({refresh_token: REFRESH})}).catch(()=>{});
+  }
+  ACCESS=''; REFRESH=''; ME=null;
+  localStorage.removeItem('kd_access'); localStorage.removeItem('kd_refresh'); localStorage.removeItem('kd_me');
+  clearInterval(healthInterval);
+  document.getElementById('app-shell').style.display = 'none';
+  document.getElementById('auth-shell').style.display = 'flex';
+}
+
+async function doChangePw() {
+  const cur = document.getElementById('cpw-cur').value;
+  const nw = document.getElementById('cpw-new').value;
+  const con = document.getElementById('cpw-con').value;
+  const err = document.getElementById('cpw-err');
+  err.classList.remove('show');
+  if (nw !== con) { err.textContent = 'Passwords do not match'; err.classList.add('show'); return; }
+  try {
+    await api('POST', '/api/auth/change-password', {current_password: cur, new_password: nw});
+    toast('Password updated — please sign in again', 'success');
+    setTimeout(doLogout, 1500);
+  } catch(e) { err.textContent = e.message; err.classList.add('show'); }
+}
+
+// ── App boot ──────────────────────────────────────────────────────
+function bootApp() {
+  document.getElementById('auth-shell').style.display = 'none';
+  document.getElementById('app-shell').style.display = 'flex';
+  document.getElementById('app-shell').style.flexDirection = 'column';
+
+  // Header user
+  const name = ME.full_name || ME.email.split('@')[0];
+  document.getElementById('hdr-name').textContent = name;
+  document.getElementById('hdr-avatar').textContent = name[0].toUpperCase();
+  document.getElementById('dd-name').textContent = ME.full_name || name;
+  document.getElementById('dd-email').textContent = ME.email;
+  const badge = document.getElementById('hdr-role-badge');
+  badge.textContent = ME.role === 'superadmin' ? 'Superadmin' : ME.role === 'tenant_admin' ? 'Admin' : 'Member';
+  badge.className = 'role-badge ' + ME.role;
+  if (ME.tenant) {
+    document.getElementById('hdr-workspace').textContent = ME.tenant.name;
+    document.getElementById('hdr-workspace').style.display = 'block';
+  }
+
+  buildSidebar();
+  startHealthCheck();
+
+  // Route to the requested/deep-linked page, or the safest page for the role.
+  showPage(pageFromLocationForRole(ME.role), {replace: true});
+}
+
+// ── Sidebar builder ───────────────────────────────────────────────
+function buildSidebar() {
+  const sb = document.getElementById('sidebar');
+  sb.innerHTML = '';
+  const role = ME.role;
+
+  if (role !== 'superadmin') {
+    addSection(sb, 'Workspace');
+    addNavItem(sb, 'ask', askIcon(), 'Ask');
+    addNavItem(sb, 'history', historyIcon(), 'History');
+    addNavItem(sb, 'documents', docsIcon(), 'Documents');
+    addNavItem(sb, 'collections', collectionsIcon(), 'Collections');
+    addNavItem(sb, 'insights', insightsIcon(), 'Insights');
+  }
+
+  if (role === 'tenant_admin') {
+    addSection(sb, 'Administration');
+    addNavItem(sb, 'users', usersIcon(), 'Users');
+    addNavItem(sb, 'webhooks', webhooksIcon(), 'Webhooks');
+    addNavItem(sb, 'audit', auditIcon(), 'Audit log');
+    addNavItem(sb, 'connectors', connectorsIcon(), 'Connectors');
+    addNavItem(sb, 'settings', settingsIcon(), 'Settings');
+  }
+
+  if (role === 'superadmin') {
+    addSection(sb, 'Platform');
+    addNavItem(sb, 'sa-stats', insightsIcon(), 'Overview');
+    addNavItem(sb, 'sa-tenants', buildingIcon(), 'Workspaces');
+    addNavItem(sb, 'sa-users', usersIcon(), 'All users');
+    addNavItem(sb, 'sa-audit', auditIcon(), 'Audit log');
+  }
+
+  addSection(sb, 'Account');
+  addNavItem(sb, 'change-pw', lockIcon(), 'Change password');
+
+  // Footer health
+  sb.innerHTML += `<div class="sidebar-footer">
+    <div class="health-dot"><div class="dot" id="sb-qdrant"></div>Vector index</div>
+    <div class="health-dot"><div class="dot" id="sb-llm"></div><span id="sb-llm-label">LLM</span></div>
+  </div>`;
+}
+
+function addSection(sb, label) {
+  const d = document.createElement('div');
+  d.className = 'sidebar-section-label'; d.textContent = label;
+  sb.appendChild(d);
+}
+function addNavItem(sb, page, iconSvg, label) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'nav-item';
+  btn.id = 'nav-' + page;
+  btn.dataset.page = page;
+  btn.setAttribute('aria-controls', 'page-' + page);
+  btn.setAttribute('aria-label', 'Open ' + label);
+  btn.innerHTML = iconSvg + `<span>${label}</span>`;
+  const activate = (event) => navigateToPage(page, event);
+  btn.onclick = activate;                    // inline fallback for older WebViews
+  btn.addEventListener('click', activate);   // normal browser path
+  btn.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') activate(event);
+  });
+  sb.appendChild(btn);
+}
+
+// ── Icons ─────────────────────────────────────────────────────────
+const _i = (d) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${d}</svg>`;
+const askIcon = () => _i('<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>');
+const historyIcon = () => _i('<path d="M3 12a9 9 0 109-9"/><path d="M3 3v6h6"/><path d="M12 7v5l3 2"/>');
+const collectionsIcon = () => _i('<path d="M4 4h16v5H4z"/><path d="M4 13h16v7H4z"/><path d="M8 9v4"/>');
+const webhooksIcon = () => _i('<path d="M18 16.5a3.5 3.5 0 11-3.42 2.75"/><path d="M6 7.5A3.5 3.5 0 119.42 4.75"/><path d="M18 7.5A3.5 3.5 0 1114.58 4.75"/><path d="M8.7 8.8l6.6 6.4M15.3 8.8l-6.6 6.4"/>');
+const docsIcon = () => _i('<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>');
+const insightsIcon = () => _i('<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>');
+const usersIcon = () => _i('<path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>');
+const auditIcon = () => _i('<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>');
+const connectorsIcon = () => _i('<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>');
+const settingsIcon = () => _i('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>');
+const lockIcon = () => _i('<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/>');
+const buildingIcon = () => _i('<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>');
+const trashIcon = () => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg>`;
+
+// ── Page routing ──────────────────────────────────────────────────
+function normalizePage(page) {
+  const role = ME?.role || 'member';
+  if (!page || !document.getElementById('page-' + page)) return defaultPageForRole(role);
+  if (ME && !allowedPagesForRole(role).includes(page)) return defaultPageForRole(role);
+  return page;
+}
+
+function navigateToPage(page, event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  showPage(page);
+  return false;
+}
+window.navigateToPage = navigateToPage;
+
+function showPage(page, options = {}) {
+  page = normalizePage(page);
+  const pageEl = document.getElementById('page-' + page);
+  if (!pageEl) return;
+
+  // Use both classes and explicit display styles. The explicit style is a
+  // deliberate failsafe for stale CSS/cache/proxy situations where the class
+  // update happens but the visual page does not change.
+  document.querySelectorAll('.page').forEach(p => {
+    p.classList.remove('active');
+    p.style.display = 'none';
+  });
+  document.querySelectorAll('.nav-item').forEach(n => {
+    n.classList.toggle('active', n.dataset.page === page);
+    n.setAttribute('aria-current', n.dataset.page === page ? 'page' : 'false');
+  });
+  pageEl.classList.add('active');
+  pageEl.style.display = 'block';
+
+  currentPage = page;
+  try { localStorage.setItem('kd_current_page', page); } catch (_) {}
+
+  const dd = document.getElementById('user-dropdown');
+  if (dd) dd.classList.remove('open');
+  if (!options.noHistory) updateBrowserUrl(page, options.replace);
+
+  // Load page data after the page is already visible so a failed API call never
+  // leaves the user stuck on the previous screen.
+  try {
+    if (page === 'history') loadHistory();
+    else if (page === 'documents') loadDocuments();
+    else if (page === 'collections') loadCollections();
+    else if (page === 'insights') loadInsights();
+    else if (page === 'webhooks') loadWebhooks();
+    else if (page === 'audit') loadAudit();
+    else if (page === 'users') loadUsers();
+    else if (page === 'settings') loadSettings();
+    else if (page === 'sa-tenants') loadSATenants();
+    else if (page === 'sa-users') loadSAUsers();
+    else if (page === 'sa-audit') loadSAAudit();
+    else if (page === 'sa-stats') loadSAStats();
+  } catch (err) {
+    console.error('Page load failed for', page, err);
+    toast('Page opened, but data failed to refresh', 'error');
+  }
+}
+
+function toggleDropdown(event) {
+  if (event) {
+    const pageTarget = event.target.closest('[data-page]');
+    if (pageTarget) {
+      event.preventDefault();
+      event.stopPropagation();
+      showPage(pageTarget.dataset.page);
+      return;
+    }
+    event.stopPropagation();
+  }
+  const dd = document.getElementById('user-dropdown');
+  if (dd) dd.classList.toggle('open');
+}
+
+document.addEventListener('click', e => {
+  const pageTarget = e.target.closest && e.target.closest('[data-page]');
+  if (pageTarget) {
+    navigateToPage(pageTarget.dataset.page, e);
+    return;
+  }
+  const hdrUser = document.getElementById('hdr-user');
+  const dd = document.getElementById('user-dropdown');
+  if (hdrUser && dd && !hdrUser.contains(e.target)) dd.classList.remove('open');
+}, true);
+
+// ── Health check ──────────────────────────────────────────────────
+function startHealthCheck() {
+  const check = async () => {
+    try {
+      const h = await api('GET', '/api/health');
+      if (!h) return;
+      const setDot = (id, status) => {
+        const el = document.getElementById(id);
+        if (el) { el.className = 'dot ' + (status === 'ok' ? 'green' : status === 'disabled' ? 'amber' : 'red'); }
+      };
+      setDot('hd-qdrant', h.qdrant); setDot('sb-qdrant', h.qdrant);
+      setDot('hd-llm', h.llm); setDot('sb-llm', h.llm);
+      const llmLabel = `${h.llm_model} (${h.llm})`;
+      ['hd-llm-label','sb-llm-label'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=llmLabel; });
+    } catch(e){}
+  };
+  check();
+  healthInterval = setInterval(check, 10000);
+}
+
+// ── Ask page ──────────────────────────────────────────────────────
+let asking = false;
+function sendQ(q) { document.getElementById('ask-input').value = q; sendAsk(); }
+async function sendAsk() {
+  if (asking) return;
+  const inp = document.getElementById('ask-input');
+  const q = inp.value.trim();
+  if (!q) return;
+  inp.value = '';
+  asking = true;
+  document.getElementById('ask-btn').disabled = true;
+  document.getElementById('quick-chips').style.display = 'none';
+
+  const chat = document.getElementById('chat-area');
+  // User bubble
+  const um = document.createElement('div');
+  um.className = 'msg msg-user';
+  um.innerHTML = `<div class="msg-label">YOU</div><div class="msg-body">${esc(q)}</div>`;
+  chat.appendChild(um);
+
+  // AI bubble
+  const am = document.createElement('div');
+  am.className = 'msg msg-ai';
+  am.innerHTML = `<div class="msg-label">KNOWLEDGEDESK</div><div class="msg-body" id="ai-body-cur"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+  chat.appendChild(am);
+  chat.scrollTop = chat.scrollHeight;
+
+  try {
+    const r = await api('POST', '/api/query/ask/stream', {question: q}, true);
+    const reader = r.body.getReader(); const decoder = new TextDecoder();
+    let buf = ''; let queryId = null; let confidence = 0; let sources = []; let notFound = false;
+    const body = document.getElementById('ai-body-cur');
+    body.innerHTML = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data:')) continue;
+        const evt = JSON.parse(line.slice(5).trim());
+        if (evt.type === 'meta') {
+          queryId = evt.query_id; confidence = evt.confidence;
+          sources = evt.sources || [];
+          notFound = evt.mode === 'not_found';
+          if (notFound) body.classList.add('not-found');
+        } else if (evt.type === 'status') {
+          if (evt.mode === 'llm_unavailable') {
+            const st = document.createElement('div');
+            st.style.cssText = 'background:var(--amber-dim);border:1px solid var(--amber);color:#92580A;border-radius:8px;padding:10px;margin-bottom:10px;font-size:12px';
+            st.textContent = 'Generation fallback: ' + (evt.message || 'language model unavailable');
+            body.appendChild(st);
+          }
+        } else if (evt.type === 'error') {
+          body.innerHTML = '<div style="color:#B42318;font-weight:600">Generation error</div><div style="margin-top:6px">' + esc(evt.message || 'Unknown error') + '</div>';
+          chat.scrollTop = chat.scrollHeight;
+        } else if (evt.type === 'token') {
+          body.innerHTML += esc(evt.text).replace(/\n/g, '<br>');
+          chat.scrollTop = chat.scrollHeight;
+        } else if (evt.type === 'done') {
+          // Append sources
+          if (sources.length) {
+            const sf = document.createElement('div');
+            sf.className = 'sources';
+            sources.forEach((s, i) => {
+              const chip = document.createElement('div');
+              chip.className = 'source-chip';
+              chip.textContent = `[${i+1}] ${s.filename}`;
+              const panel = document.createElement('div');
+              panel.className = 'source-panel';
+              panel.textContent = s.text ? s.text.slice(0, 400) + (s.text.length > 400 ? '…' : '') : '';
+              chip.onclick = () => panel.classList.toggle('open');
+              sf.appendChild(chip);
+              sf.appendChild(panel);
+            });
+            body.appendChild(sf);
+          }
+          if (confidence > 0) {
+            const cf = document.createElement('div');
+            cf.className = 'confidence';
+            cf.innerHTML = `Confidence: <span>${Math.round(confidence*100)}%</span>`;
+            body.appendChild(cf);
+          }
+          if (queryId) {
+            const fb = document.createElement('div');
+            fb.className = 'feedback-row';
+            fb.innerHTML = `Was this helpful? <button class="fb-btn" onclick="sendFb(${queryId},true,this)">👍</button><button class="fb-btn" onclick="sendFb(${queryId},false,this)">👎</button>`;
+            body.appendChild(fb);
+          }
+        }
+      }
+    }
+  } catch(e) {
+    document.getElementById('ai-body-cur').textContent = 'Error: ' + e.message;
+  } finally {
+    asking = false;
+    document.getElementById('ask-btn').disabled = false;
+    document.getElementById('ai-body-cur') && document.getElementById('ai-body-cur').removeAttribute('id');
+  }
+}
+
+async function sendFb(id, helpful, btn) {
+  await api('POST', '/api/query/feedback', {query_id: id, helpful});
+  btn.parentElement.innerHTML = helpful ? '👍 Marked helpful' : '👎 Marked unhelpful';
+}
+
+
+// ── History ───────────────────────────────────────────────────────
+async function loadHistory() {
+  const box = document.getElementById('history-list');
+  if (!box) return;
+  box.innerHTML = `<div style="color:var(--ink-muted);font-size:13px">Loading history…</div>`;
+  try {
+    const rows = await api('GET', '/api/admin/queries?limit=100') || [];
+    if (!rows.length) { box.innerHTML = `<div style="color:var(--ink-muted);font-size:13px">No questions asked yet.</div>`; return; }
+    box.innerHTML = rows.map(r => `<div class="query-row">
+      <div style="font-weight:600;margin-bottom:4px">${esc(r.question)}</div>
+      <div style="color:var(--ink-muted);font-size:12px">${esc(r.created_at ? fmtDate(r.created_at) : '')} · ${esc(r.mode || 'answer')} · confidence ${Math.round((r.confidence || 0) * 100)}% · ${r.latency_ms || 0} ms</div>
+    </div>`).join('');
+  } catch(e) {
+    box.innerHTML = `<div style="color:var(--red);font-size:13px">Could not load history: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Collections ───────────────────────────────────────────────────
+async function loadCollections() {
+  const box = document.getElementById('collections-list');
+  if (!box) return;
+  box.innerHTML = `<div style="color:var(--ink-muted);font-size:13px">Loading collections…</div>`;
+  try {
+    const docs = await api('GET', '/api/documents') || [];
+    if (!docs.length) { box.innerHTML = `<div style="color:var(--ink-muted);font-size:13px">No documents uploaded yet. Upload documents to create knowledge collections.</div>`; return; }
+    const groups = {};
+    docs.forEach(d => {
+      const key = d.source || 'Uploaded documents';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(d);
+    });
+    box.innerHTML = Object.entries(groups).map(([name, items]) => `<div class="query-row">
+      <div style="font-weight:700;margin-bottom:6px">${esc(name)}</div>
+      <div style="color:var(--ink-muted);font-size:12px;margin-bottom:6px">${items.length} document(s)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${items.slice(0,12).map(d => `<span class="tag-pill">${esc(d.filename || d.title || 'Document')}</span>`).join('')}</div>
+    </div>`).join('');
+  } catch(e) {
+    box.innerHTML = `<div style="color:var(--red);font-size:13px">Could not load collections: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Webhooks ──────────────────────────────────────────────────────
+async function loadWebhooks() {
+  const box = document.getElementById('webhooks-list');
+  if (!box) return;
+  box.innerHTML = `<div class="query-row">
+    <div style="font-weight:700;margin-bottom:6px">Demo-safe webhook console</div>
+    <div style="color:var(--ink-muted);font-size:13px;line-height:1.6">This page is intentionally clickable and ready for tenant-admin workflow wiring. Suggested production events: <code>document.ingested</code>, <code>document.failed</code>, <code>query.asked</code>, <code>knowledge_gap.created</code>, and <code>connector.sync.completed</code>.</div>
+  </div>`;
+}
+
+// ── Documents ──────────────────────────────────────────────────────
+async function loadDocuments() {
+  try {
+    const docs = await api('GET', '/api/documents');
+    renderDocs(docs || []);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function renderDocs(docs) {
+  const el = document.getElementById('doc-list');
+  if (!docs.length) { el.innerHTML = '<div style="color:var(--ink-muted);font-size:13px;padding:20px 0">No documents yet. Upload files or load sample documents.</div>'; return; }
+  el.innerHTML = docs.map(d => `<div class="doc-row">
+    <div>
+      <div class="doc-name">${esc(d.filename)}</div>
+      <div class="doc-meta">${d.source} · ${fmtBytes(d.size_bytes)} · ${d.chunks||0} chunks · ${fmtDate(d.created_at)}</div>
+    </div>
+    <div class="status-pill ${d.status}">${d.status}</div>
+    <button class="del-btn" onclick="deleteDoc(${d.id},'${esc(d.filename)}')" title="Delete">${trashIcon()}</button>
+  </div>`).join('');
+}
+
+async function handleFiles(files) {
+  const selected = Array.from(files || []);
+  if (!selected.length) return;
+  const fd = new FormData();
+  const zipFiles = selected.filter(f => f.name.toLowerCase().endsWith('.zip'));
+  const regularFiles = selected.filter(f => !f.name.toLowerCase().endsWith('.zip'));
+  try {
+    const headers = {};
+    if (ACCESS) headers['Authorization'] = 'Bearer ' + ACCESS;
+    let accepted = 0, rejected = 0;
+
+    if (regularFiles.length) {
+      regularFiles.forEach(f => fd.append('files', f));
+      const r = await fetch('/api/documents/upload', {method:'POST', headers, body: fd});
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || r.statusText);
+      accepted += (data.accepted||[]).length;
+      rejected += (data.rejected||[]).length;
+    }
+
+    for (const z of zipFiles) {
+      const zfd = new FormData();
+      zfd.append('archive', z);
+      const r = await fetch('/api/documents/upload-zip', {method:'POST', headers, body: zfd});
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || r.statusText);
+      accepted += (data.accepted||[]).length;
+      rejected += (data.rejected||[]).length;
+    }
+
+    toast(`${accepted} file(s) queued${rejected ? `, ${rejected} rejected` : ''}`, accepted ? 'success' : 'error');
+    setTimeout(loadDocuments, 800);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function handleDrop(e) {
+  e.preventDefault(); document.getElementById('drop-zone').classList.remove('drag');
+  handleFiles(e.dataTransfer.files);
+}
+
+async function deleteDoc(id, name) {
+  if (!confirm(`Delete "${name}"? This removes it from the knowledge base.`)) return;
+  try { await api('DELETE', `/api/documents/${id}`); loadDocuments(); toast('Document deleted'); }
+  catch(e) { toast(e.message, 'error'); }
+}
+
+async function seedDocs() {
+  try { const r = await api('POST', '/api/demo/seed'); toast(`${r.queued} sample document(s) queued`, 'success'); setTimeout(loadDocuments, 1000); }
+  catch(e) { toast(e.message, 'error'); }
+}
+
+async function syncConnector(type) {
+  try {
+    await api('POST', `/api/connectors/${type}/sync`);
+    toast(`${type} sync started`, 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Insights ───────────────────────────────────────────────────────
+async function loadInsights() {
+  try {
+    const [stats, queries, gaps] = await Promise.all([
+      api('GET', '/api/admin/stats'),
+      api('GET', '/api/admin/queries?limit=25'),
+      api('GET', '/api/admin/gaps?limit=10'),
+    ]);
+    document.getElementById('s-docs').textContent = stats.documents_ready;
+    document.getElementById('s-queries').textContent = stats.queries_total;
+    document.getElementById('s-answered').textContent = stats.queries_answered;
+    document.getElementById('s-gaps').textContent = stats.knowledge_gaps;
+    document.getElementById('s-helpful').textContent = stats.feedback_helpful;
+    document.getElementById('s-latency').textContent = stats.avg_latency_ms;
+    document.getElementById('gap-count-badge').textContent = stats.knowledge_gaps;
+
+    const qEl = document.getElementById('q-log');
+    qEl.innerHTML = (queries||[]).length ? (queries||[]).map(q =>
+      `<div style="padding:8px 0;border-bottom:1px solid var(--border-soft)">
+        <div style="font-size:12px;font-weight:500">${esc(q.question)}</div>
+        <div style="font-size:11px;color:var(--ink-muted)">${q.mode} · ${q.confidence} · ${fmtDate(q.created_at)}</div>
+      </div>`).join('') : '<div style="color:var(--ink-muted);font-size:13px">No queries yet.</div>';
+
+    const gEl = document.getElementById('gap-list');
+    gEl.innerHTML = (gaps||[]).length ? (gaps||[]).map(g =>
+      `<div style="padding:8px 0;border-bottom:1px solid var(--border-soft)">
+        <div style="font-size:12px;font-weight:500;color:var(--red)">${esc(g.question)}</div>
+        <div style="font-size:11px;color:var(--ink-muted)">${fmtDate(g.created_at)}</div>
+      </div>`).join('') : '<div style="color:var(--ink-muted);font-size:13px">No knowledge gaps. 🎉</div>';
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Audit ──────────────────────────────────────────────────────────
+async function loadAudit() {
+  try {
+    const rows = await api('GET', '/api/admin/audit?limit=100');
+    const tb = document.getElementById('audit-body');
+    tb.innerHTML = (rows||[]).map(r =>
+      `<tr><td style="font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap">${fmtDate(r.created_at)}</td>
+       <td>${esc(r.actor)}</td><td><code style="font-size:11px">${esc(r.action)}</code></td><td style="color:var(--ink-muted);font-size:12px">${esc(r.detail||'')}</td></tr>`
+    ).join('') || '<tr><td colspan="4" style="color:var(--ink-muted);padding:16px">No audit records yet.</td></tr>';
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Users ──────────────────────────────────────────────────────────
+async function loadUsers() {
+  try {
+    allUsers = await api('GET', '/api/users') || [];
+    renderUsers(allUsers);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function filterUsers() {
+  const q = document.getElementById('user-search').value.toLowerCase();
+  renderUsers(allUsers.filter(u => (u.email+u.full_name).toLowerCase().includes(q)));
+}
+
+function renderUsers(users) {
+  const tb = document.getElementById('users-body');
+  if (!users.length) { tb.innerHTML = '<tr><td colspan="6" style="color:var(--ink-muted);padding:16px">No users found.</td></tr>'; return; }
+  tb.innerHTML = users.map(u => `<tr>
+    <td style="font-weight:500">${esc(u.full_name||'—')}</td>
+    <td style="font-size:12px;color:var(--ink-muted)">${esc(u.email)}</td>
+    <td><span class="role-badge ${u.role}">${u.role}</span></td>
+    <td><span class="status-pill ${u.is_active?'ready':'failed'}">${u.is_active?'Active':'Disabled'}</span></td>
+    <td style="font-size:12px;color:var(--ink-muted)">${fmtDate(u.last_login_at)||'Never'}</td>
+    <td style="display:flex;gap:6px;align-items:center">
+      <button class="btn-sm btn-secondary" style="font-size:11px;padding:4px 10px" onclick="toggleUserActive(${u.id},${u.is_active})">${u.is_active?'Disable':'Enable'}</button>
+      <button class="btn-sm btn-secondary" style="font-size:11px;padding:4px 10px" onclick="openResetPw(${u.id})">Reset pw</button>
+    </td>
+  </tr>`).join('');
+}
+
+async function toggleUserActive(id, cur) {
+  try { await api('PATCH', `/api/users/${id}`, {is_active: !cur}); loadUsers(); toast('User updated'); }
+  catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Settings ───────────────────────────────────────────────────────
+let MODEL_CATALOG = null;
+
+function optionHtml(items, selected) {
+  return (items || []).map(i => {
+    const value = i.key || i.value;
+    const label = i.label || value;
+    return `<option value="${esc(value)}" ${value === selected ? 'selected' : ''}>${esc(label)}</option>`;
+  }).join('');
+}
+
+function selectedProfile() {
+  const key = document.getElementById('set-profile')?.value;
+  return (MODEL_CATALOG?.profiles || []).find(p => p.key === key);
+}
+
+function applySelectedProfileDefaults() {
+  const p = selectedProfile();
+  if (!p) return;
+  document.getElementById('profile-description').textContent = p.description || '';
+  document.getElementById('set-embedding-model').value = p.embedding_model || document.getElementById('set-embedding-model').value;
+  document.getElementById('set-llm-model').value = p.llm_model || document.getElementById('set-llm-model').value;
+  document.getElementById('set-reranker-model').value = p.reranker_model || document.getElementById('set-reranker-model').value;
+  document.getElementById('set-reranker-enabled').checked = !!p.reranker_enabled;
+  document.getElementById('set-topk').value = p.retrieval_top_k ?? document.getElementById('set-topk').value;
+  document.getElementById('set-rerank-topk').value = p.rerank_top_k ?? document.getElementById('set-rerank-topk').value;
+  document.getElementById('set-threshold').value = p.retrieval_score_threshold ?? document.getElementById('set-threshold').value;
+  document.getElementById('set-context').value = p.retrieval_max_context_chars ?? document.getElementById('set-context').value;
+  document.getElementById('set-max-tokens').value = p.llm_max_tokens ?? document.getElementById('set-max-tokens').value;
+  document.getElementById('set-temp').value = p.llm_temperature ?? document.getElementById('set-temp').value;
+  updateModelWarning();
+}
+
+function updateModelWarning() {
+  const warn = document.getElementById('model-warning');
+  if (!warn || !MODEL_CATALOG) return;
+  const profile = selectedProfile();
+  const emb = document.getElementById('set-embedding-model')?.value;
+  const rer = document.getElementById('set-reranker-model')?.value;
+  const llm = document.getElementById('set-llm-model')?.value;
+  const heavy = MODEL_CATALOG.heavy_local_models || {};
+  const largeOllama = MODEL_CATALOG.large_ollama_models || {};
+  const messages = [];
+  if (profile && profile.demo_safe === false) messages.push(`Selected profile is not laptop-safe: ${profile.label || profile.key}.`);
+  if (heavy[emb]) messages.push(heavy[emb]);
+  if (heavy[rer] && document.getElementById('set-reranker-enabled')?.checked) messages.push(heavy[rer]);
+  if (largeOllama[llm]) messages.push(largeOllama[llm]);
+  else if (llm && /(27b|32b|70b|24b)/i.test(llm)) messages.push(`${llm} is a large Ollama model. It may require a GPU and a long first pull.`);
+  if (messages.length) {
+    warn.style.display = 'block';
+    warn.textContent = messages.join(' ') + ' For a quick Docker demo, use Demo Fast / Laptop Safe. Premium Hugging Face models require ALLOW_HEAVY_LOCAL_MODELS=true and HF_TOKEN.';
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
+async function loadSettings() {
+  try {
+    const [catalog, cfg] = await Promise.all([
+      MODEL_CATALOG ? Promise.resolve(MODEL_CATALOG) : api('GET', '/api/admin/model-catalog'),
+      api('GET', '/api/admin/config')
+    ]);
+    MODEL_CATALOG = catalog;
+
+    document.getElementById('set-profile').innerHTML = optionHtml(catalog.profiles, cfg.model_profile);
+    document.getElementById('set-embedding-model').innerHTML = optionHtml(catalog.embedding_models, cfg.embedding_model);
+    document.getElementById('set-llm-model').innerHTML = optionHtml(catalog.llm_models, cfg.llm_model);
+    document.getElementById('set-reranker-model').innerHTML = optionHtml(catalog.reranker_models, cfg.reranker_model);
+
+    document.getElementById('set-profile').value = cfg.model_profile || 'enterprise_balanced';
+    document.getElementById('set-embedding-model').value = cfg.embedding_model;
+    document.getElementById('set-llm-model').value = cfg.llm_model;
+    document.getElementById('set-reranker-model').value = cfg.reranker_model;
+    document.getElementById('set-reranker-enabled').checked = !!cfg.reranker_enabled;
+    document.getElementById('set-topk').value = cfg.retrieval_top_k;
+    document.getElementById('set-rerank-topk').value = cfg.rerank_top_k;
+    document.getElementById('set-threshold').value = cfg.retrieval_score_threshold;
+    document.getElementById('set-context').value = cfg.retrieval_max_context_chars;
+    document.getElementById('set-max-tokens').value = cfg.llm_max_tokens;
+    document.getElementById('set-temp').value = cfg.llm_temperature;
+
+    const p = selectedProfile();
+    document.getElementById('profile-description').textContent = p?.description || '';
+    updateModelWarning();
+
+    const idx = cfg.index_status || {};
+    const warn = document.getElementById('reindex-warning');
+    if (idx.reindex_required) {
+      warn.style.display = 'block';
+      warn.textContent = `${idx.documents_indexed_for_current_embedding}/${idx.ready_documents} ready documents are indexed for ${idx.current_embedding_model}. Re-upload or re-seed documents after changing embedding models.`;
+    } else {
+      warn.style.display = 'none';
+    }
+
+    const display = {
+      model_profile: cfg.model_profile,
+      embedding_model: cfg.embedding_model,
+      reranker_enabled: cfg.reranker_enabled,
+      reranker_model: cfg.reranker_model,
+      llm_provider: cfg.llm_provider,
+      llm_model: cfg.llm_model,
+      retrieval_top_k: cfg.retrieval_top_k,
+      rerank_top_k: cfg.rerank_top_k,
+      retrieval_score_threshold: cfg.retrieval_score_threshold,
+      retrieval_max_context_chars: cfg.retrieval_max_context_chars,
+      index_status: JSON.stringify(cfg.index_status || {})
+    };
+    document.getElementById('config-details').innerHTML = Object.entries(display).map(([k,v])=>`<div><b>${esc(k)}</b>: ${esc(v)}</div>`).join('');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function saveSettings() {
+  const settings = {
+    model_profile: document.getElementById('set-profile').value,
+    embedding_provider: 'local',
+    embedding_model: document.getElementById('set-embedding-model').value,
+    reranker_enabled: document.getElementById('set-reranker-enabled').checked,
+    reranker_model: document.getElementById('set-reranker-model').value,
+    rerank_top_k: parseInt(document.getElementById('set-rerank-topk').value),
+    llm_provider: document.getElementById('set-llm-model').value === 'none' ? 'none' : 'ollama',
+    llm_model: document.getElementById('set-llm-model').value,
+    retrieval_top_k: parseInt(document.getElementById('set-topk').value),
+    retrieval_score_threshold: parseFloat(document.getElementById('set-threshold').value),
+    retrieval_max_context_chars: parseInt(document.getElementById('set-context').value),
+    llm_max_tokens: parseInt(document.getElementById('set-max-tokens').value),
+    llm_temperature: parseFloat(document.getElementById('set-temp').value)
+  };
+  try {
+    const res = await api('PUT', '/api/admin/settings', {settings});
+    toast(res.note || 'Tenant model settings saved', res.note ? 'warning' : 'success');
+    loadSettings();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Create user modal ─────────────────────────────────────────────
+let _saFlow = false;
+function openCreateUser(superadminFlow) {
+  _saFlow = !!superadminFlow;
+  document.getElementById('cu-name').value = '';
+  document.getElementById('cu-email').value = '';
+  document.getElementById('cu-pw').value = '';
+  document.getElementById('cu-result').style.display = 'none';
+  const tg = document.getElementById('cu-tenant-group');
+  const roleEl = document.getElementById('cu-role');
+  if (_saFlow) {
+    tg.style.display = 'block';
+    // Populate tenant options
+    api('GET', '/api/admin/tenants').then(ts => {
+      const sel = document.getElementById('cu-tenant-slug');
+      sel.innerHTML = (ts||[]).map(t => `<option value="${t.slug}">${t.name} (${t.slug})</option>`).join('');
+    });
+    // Allow superadmin role too
+    roleEl.innerHTML = `
+      <option value="member">Member</option>
+      <option value="tenant_admin">Workspace Admin</option>
+      <option value="superadmin">Platform Superadmin</option>`;
+  } else {
+    tg.style.display = 'none';
+    roleEl.innerHTML = `
+      <option value="member">Member</option>
+      <option value="tenant_admin">Workspace Admin</option>`;
+  }
+  openModal('modal-create-user');
+}
+
+async function submitCreateUser() {
+  const body = {
+    full_name: document.getElementById('cu-name').value.trim(),
+    email: document.getElementById('cu-email').value.trim(),
+    role: document.getElementById('cu-role').value,
+    password: document.getElementById('cu-pw').value || undefined,
+  };
+  if (_saFlow) body.tenant_slug = document.getElementById('cu-tenant-slug').value || undefined;
+  try {
+    const res = await api('POST', '/api/users', body);
+    if (res.temporary_password) {
+      const r = document.getElementById('cu-result');
+      r.style.display = 'block';
+      r.textContent = `Temporary password: ${res.temporary_password}`;
+    }
+    toast('User created', 'success');
+    _saFlow ? loadSAUsers() : loadUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Reset password modal ───────────────────────────────────────────
+function openResetPw(userId) {
+  _resetTarget = userId;
+  document.getElementById('rp-result').style.display = 'none';
+  document.getElementById('rp-footer').style.display = 'flex';
+  openModal('modal-reset-pw');
+}
+
+async function submitResetPw() {
+  try {
+    const res = await api('POST', `/api/users/${_resetTarget}/reset-password`);
+    const r = document.getElementById('rp-result');
+    r.style.display = 'block';
+    r.textContent = `Temporary password: ${res.temporary_password}`;
+    document.getElementById('rp-footer').style.display = 'none';
+    toast('Password reset', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Superadmin pages ───────────────────────────────────────────────
+async function loadSATenants() {
+  try {
+    const ts = await api('GET', '/api/admin/tenants') || [];
+    const tb = document.getElementById('sa-tenants-body');
+    tb.innerHTML = ts.map(t => `<tr>
+      <td style="font-weight:500">${esc(t.name)}</td>
+      <td><code style="font-size:11px">${esc(t.slug)}</code></td>
+      <td>${t.users}</td><td>${t.documents}</td>
+      <td><code style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(t.api_key)}</code></td>
+      <td style="font-size:12px;color:var(--ink-muted)">${fmtDate(t.created_at)}</td>
+      <td><button class="btn-sm btn-danger" style="font-size:11px;padding:4px 10px" onclick="deleteTenant('${esc(t.slug)}','${esc(t.name)}')">Delete</button></td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--ink-muted);padding:16px">No workspaces.</td></tr>';
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadSAUsers() {
+  try {
+    const slug = document.getElementById('sa-tenant-filter')?.value;
+    const url = '/api/users' + (slug ? `?tenant=${slug}` : '');
+    const users = await api('GET', url) || [];
+    // also populate filter
+    const sel = document.getElementById('sa-tenant-filter');
+    if (sel && sel.children.length <= 1) {
+      api('GET', '/api/admin/tenants').then(ts => {
+        sel.innerHTML = '<option value="">All workspaces</option>' + (ts||[]).map(t=>`<option value="${t.slug}">${t.name}</option>`).join('');
+      });
+    }
+    const tb = document.getElementById('sa-users-body');
+    tb.innerHTML = users.map(u => `<tr>
+      <td style="font-weight:500">${esc(u.full_name||'—')}</td>
+      <td style="font-size:12px">${esc(u.email)}</td>
+      <td><span class="role-badge ${u.role}">${u.role}</span></td>
+      <td style="font-size:12px;color:var(--ink-muted)">${esc(u.tenant_slug||'—')}</td>
+      <td><span class="status-pill ${u.is_active?'ready':'failed'}">${u.is_active?'Active':'Disabled'}</span></td>
+      <td style="font-size:12px;color:var(--ink-muted)">${fmtDate(u.last_login_at)||'Never'}</td>
+      <td style="display:flex;gap:6px">
+        <button class="btn-sm btn-secondary" style="font-size:11px;padding:4px 10px" onclick="toggleUserActive(${u.id},${u.is_active})">${u.is_active?'Disable':'Enable'}</button>
+        <button class="btn-sm btn-secondary" style="font-size:11px;padding:4px 10px" onclick="openResetPw(${u.id})">Reset pw</button>
+      </td>
+    </tr>`).join('') || '<tr><td colspan="7" style="color:var(--ink-muted);padding:16px">No users found.</td></tr>';
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadSAAudit() {
+  try {
+    const rows = await api('GET', '/api/admin/platform/audit?limit=200') || [];
+    const tb = document.getElementById('sa-audit-body');
+    tb.innerHTML = rows.map(r => `<tr>
+      <td style="font-family:'JetBrains Mono',monospace;font-size:11px;white-space:nowrap">${fmtDate(r.created_at)}</td>
+      <td style="font-size:12px">${esc(r.actor)}</td>
+      <td><span class="role-badge ${r.role||'member'}" style="font-size:10px">${r.role||'?'}</span></td>
+      <td><code style="font-size:11px">${esc(r.action)}</code></td>
+      <td style="color:var(--ink-muted);font-size:12px">${esc(r.detail||'')}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="color:var(--ink-muted);padding:16px">No audit records yet.</td></tr>';
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadSAStats() {
+  try {
+    const s = await api('GET', '/api/admin/platform/stats');
+    document.getElementById('sa-s-tenants').textContent = s.tenants;
+    document.getElementById('sa-s-users').textContent = s.users;
+    document.getElementById('sa-s-docs').textContent = s.documents;
+    document.getElementById('sa-s-queries').textContent = s.queries_total;
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Tenant CRUD ────────────────────────────────────────────────────
+function openCreateTenant() {
+  document.getElementById('ct-name').value = '';
+  document.getElementById('ct-slug').value = '';
+  document.getElementById('ct-result').style.display = 'none';
+  openModal('modal-create-tenant');
+}
+
+document.getElementById('ct-name').addEventListener('input', function() {
+  document.getElementById('ct-slug').value = this.value.trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+});
+
+async function submitCreateTenant() {
+  const name = document.getElementById('ct-name').value.trim();
+  const slug = document.getElementById('ct-slug').value.trim();
+  try {
+    const res = await api('POST', '/api/admin/tenants', {name, slug});
+    const r = document.getElementById('ct-result');
+    r.style.display = 'block';
+    r.textContent = `Workspace created. API key: ${res.api_key}`;
+    toast('Workspace created', 'success');
+    loadSATenants();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteTenant(slug, name) {
+  if (!confirm(`Permanently delete workspace "${name}" and all its data?`)) return;
+  try { await api('DELETE', `/api/admin/tenants/${slug}`); toast('Workspace deleted'); loadSATenants(); }
+  catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Modals ────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if (e.target === el) el.classList.remove('open'); });
+});
+
+// ── Toast ─────────────────────────────────────────────────────────
+let toastTimer;
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show' + (type ? ' ' + type : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.className = '', 3000);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtBytes(b) { if(!b) return '0 B'; const k=1024; const s=['B','KB','MB','GB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(1)+' '+s[i]; }
+function fmtDate(s) { if(!s) return null; return new Date(s).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}); }
+
+function syncPageFromRoute() {
+  if (ACCESS && ME) showPage(pageFromLocationForRole(ME.role), {noHistory: true});
+}
+window.addEventListener('popstate', syncPageFromRoute);
+window.addEventListener('hashchange', syncPageFromRoute);
+
+// ── Auto-boot if session exists ───────────────────────────────────
+if (ACCESS && ME) {
+  document.getElementById('auth-shell').style.display = 'none';
+  bootApp();
+}
+</script>
+</body>
+</html>

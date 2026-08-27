@@ -1,0 +1,72 @@
+services:
+  # ── Vector database ────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: kd-qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Local LLM runtime (zero API cost) ──────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: kd-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    # Uncomment for NVIDIA GPU acceleration:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # ── One-shot: pulls the default model on first boot ────────────────
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: kd-ollama-init
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: >
+      sh -c "sleep 4 && ollama pull ${LLM_MODEL:-gemma3:4b} && echo 'Model ready.'"
+    restart: "no"
+
+  # ── KnowledgeDesk API + UI ──────────────────────────────────────────
+  app:
+    build:
+      context: ./backend
+      args:
+        EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+    container_name: kd-app
+    env_file: .env
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - OLLAMA_URL=http://ollama:11434
+    volumes:
+      - app_data:/data
+      - ./sample_docs:/app/sample_docs:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+      ollama-init:
+        condition: service_completed_successfully
+
+volumes:
+  qdrant_data:
+  ollama_data:
+  app_data:
