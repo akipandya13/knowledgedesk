@@ -644,6 +644,22 @@ tr:hover td { background: var(--paper); }
         </div>
       </div>
 
+      <!-- ── Model connectors (tenant admin) ──────────────────────── -->
+      <div class="page" id="page-model-connectors">
+        <div class="page-title">Model connectors</div>
+        <div class="page-subtitle">Define the LLM and embedding backends for this workspace — AWS Bedrock, Azure AI Foundry, or a local model. Select the active ones on the Settings page.</div>
+        <div class="action-bar">
+          <span style="font-size:12px;color:var(--ink-muted)">Credentials are encrypted at rest and never shown again after saving.</span>
+          <button class="btn-accent" onclick="openConnectorModal()">+ Add connector</button>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table>
+            <thead><tr><th>Name</th><th>Type</th><th>Provider</th><th>Model</th><th>Secrets</th><th></th></tr></thead>
+            <tbody id="model-connectors-body"><tr><td colspan="6" style="color:var(--ink-muted);padding:20px">Loading…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- ── Settings (tenant admin) ───────────────────────────────── -->
       <div class="page" id="page-settings">
         <div class="page-title">Workspace settings</div>
@@ -658,13 +674,23 @@ tr:hover td { background: var(--paper); }
             <div id="profile-description" style="font-size:12px;color:var(--ink-muted);line-height:1.5;margin-bottom:16px"></div>
 
             <div class="form-group">
-              <label>Embedding model</label>
-              <select id="set-embedding-model" onchange="updateModelWarning()"></select>
+              <label>LLM connector</label>
+              <select id="set-llm-connector" onchange="onConnectorSelectChange()"></select>
+              <div style="font-size:11px;color:var(--ink-muted);margin-top:4px">Manage backends on the <a href="#/model-connectors" onclick="navigateToPage('model-connectors',event)">Model connectors</a> page.</div>
             </div>
-            <div class="form-group">
-              <label>Generation model</label>
+            <div class="form-group" id="builtin-llm-group">
+              <label>Built-in generation model</label>
               <select id="set-llm-model" onchange="updateModelWarning()"></select>
             </div>
+            <div class="form-group">
+              <label>Embedding connector</label>
+              <select id="set-embedding-connector" onchange="onConnectorSelectChange()"></select>
+            </div>
+            <div class="form-group" id="builtin-embedding-group">
+              <label>Built-in embedding model</label>
+              <select id="set-embedding-model" onchange="updateModelWarning()"></select>
+            </div>
+            <div id="embedding-lock-notice" style="display:none;background:var(--paper);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;color:var(--ink-soft);margin-bottom:16px"></div>
             <div class="form-group">
               <label>Reranker model</label>
               <select id="set-reranker-model" onchange="updateModelWarning()"></select>
@@ -838,6 +864,36 @@ tr:hover td { background: var(--paper); }
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-connector">
+  <div class="modal">
+    <div class="modal-title" id="mc-title">Add model connector</div>
+    <input type="hidden" id="mc-id">
+    <div class="form-group"><label>Name</label><input type="text" id="mc-name" placeholder="Bedrock Claude (prod)"></div>
+    <div class="form-group"><label>Purpose</label>
+      <select id="mc-kind" onchange="renderConnectorFields()">
+        <option value="llm">LLM — answer generation</option>
+        <option value="embedding">Embedding — document / query vectors</option>
+      </select>
+    </div>
+    <div class="form-group"><label>Provider</label>
+      <select id="mc-provider" onchange="renderConnectorFields()"></select>
+    </div>
+    <div class="form-group"><label>Model ID</label>
+      <input type="text" id="mc-model" placeholder="anthropic.claude-3-5-sonnet-20240620-v1:0">
+      <div id="mc-model-hint" style="font-size:11px;color:var(--ink-muted);margin-top:4px"></div>
+    </div>
+    <div id="mc-config-fields"></div>
+    <div id="mc-secret-fields"></div>
+    <div id="mc-secret-note" style="font-size:11px;color:var(--ink-muted);margin-bottom:10px"></div>
+    <div id="mc-test-result" style="display:none;font-size:12px;border-radius:8px;padding:10px;margin-bottom:10px"></div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-secondary" onclick="closeModal('modal-connector')">Cancel</button>
+      <button class="btn-sm btn-secondary" id="mc-test-btn" onclick="testConnectorFromModal()" style="display:none">Test</button>
+      <button class="btn-sm btn-primary-sm" onclick="submitConnector()">Save connector</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-reset-pw">
   <div class="modal">
     <div class="modal-title">Reset password</div>
@@ -876,6 +932,7 @@ const PAGE_PATHS = {
   'users': '/users',
   'webhooks': '/webhooks',
   'connectors': '/connectors',
+  'model-connectors': '/model-connectors',
   'settings': '/settings',
   'change-pw': '/change-password',
   'sa-stats': '/platform/overview',
@@ -892,7 +949,7 @@ function allowedPagesForRole(role) {
   const common = ['change-pw'];
   if (role === 'superadmin') return ['sa-stats','sa-tenants','sa-users','sa-audit', ...common];
   const member = ['ask','history','documents','collections','insights'];
-  if (role === 'tenant_admin') return [...member, 'users','webhooks','audit','connectors','settings', ...common];
+  if (role === 'tenant_admin') return [...member, 'users','webhooks','audit','connectors','model-connectors','settings', ...common];
   return [...member, ...common];
 }
 function pageFromLocationForRole(role) {
@@ -1062,6 +1119,7 @@ function buildSidebar() {
     addNavItem(sb, 'webhooks', webhooksIcon(), 'Webhooks');
     addNavItem(sb, 'audit', auditIcon(), 'Audit log');
     addNavItem(sb, 'connectors', connectorsIcon(), 'Connectors');
+    addNavItem(sb, 'model-connectors', connectorsIcon(), 'Model connectors');
     addNavItem(sb, 'settings', settingsIcon(), 'Settings');
   }
 
@@ -1176,6 +1234,7 @@ function showPage(page, options = {}) {
     else if (page === 'webhooks') loadWebhooks();
     else if (page === 'audit') loadAudit();
     else if (page === 'users') loadUsers();
+    else if (page === 'model-connectors') loadModelConnectors();
     else if (page === 'settings') loadSettings();
     else if (page === 'sa-tenants') loadSATenants();
     else if (page === 'sa-users') loadSAUsers();
@@ -1550,8 +1609,162 @@ async function toggleUserActive(id, cur) {
   catch(e) { toast(e.message, 'error'); }
 }
 
-// ── Settings ───────────────────────────────────────────────────────
+// ── Model connectors ──────────────────────────────────────────────
 let MODEL_CATALOG = null;
+let CONNECTORS = [];
+
+async function ensureCatalog() {
+  if (!MODEL_CATALOG) MODEL_CATALOG = await api('GET', '/api/admin/model-catalog');
+  return MODEL_CATALOG;
+}
+
+async function loadModelConnectors() {
+  const body = document.getElementById('model-connectors-body');
+  try {
+    await ensureCatalog();
+    CONNECTORS = await api('GET', '/api/admin/model-connectors');
+    if (!CONNECTORS.length) {
+      body.innerHTML = `<tr><td colspan="6" style="color:var(--ink-muted);padding:20px">No connectors yet. Add one to use AWS Bedrock, Azure AI Foundry, or a local model.</td></tr>`;
+      return;
+    }
+    body.innerHTML = CONNECTORS.map(c => {
+      const secrets = (c.secret_fields_set || []).length ? (c.secret_fields_set.join(', ')) : '—';
+      return `<tr>
+        <td>${esc(c.name)}</td>
+        <td>${c.kind === 'llm' ? 'LLM' : 'Embedding'}</td>
+        <td>${esc((MODEL_CATALOG.connector_providers[c.provider]||{}).label || c.provider)}</td>
+        <td style="font-family:'JetBrains Mono',monospace;font-size:11px">${esc(c.model_id || '—')}</td>
+        <td style="font-size:11px;color:var(--ink-muted)">${esc(secrets)}</td>
+        <td style="white-space:nowrap;text-align:right">
+          <button class="btn-sm btn-secondary" onclick="testConnector(${c.id})">Test</button>
+          <button class="btn-sm btn-secondary" onclick="openConnectorModal(${c.id})">Edit</button>
+          <button class="btn-sm btn-danger" onclick="deleteConnector(${c.id})">${trashIcon()}</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e) { body.innerHTML = `<tr><td colspan="6" style="color:var(--red);padding:20px">${esc(e.message)}</td></tr>`; }
+}
+
+function connectorProviderSpec() {
+  const p = document.getElementById('mc-provider').value;
+  return (MODEL_CATALOG?.connector_providers || {})[p] || {config_fields: [], secret_fields: [], kinds: []};
+}
+
+function renderConnectorFields() {
+  const kind = document.getElementById('mc-kind').value;
+  const provSel = document.getElementById('mc-provider');
+  const providers = MODEL_CATALOG?.connector_providers || {};
+  // Keep only providers that support the selected kind.
+  const keep = provSel.value;
+  provSel.innerHTML = Object.entries(providers)
+    .filter(([, spec]) => spec.kinds.includes(kind))
+    .map(([k, spec]) => `<option value="${k}" ${k === keep ? 'selected' : ''}>${esc(spec.label)}</option>`).join('');
+  const spec = connectorProviderSpec();
+  document.getElementById('mc-model-hint').textContent = spec.model_id_hint || '';
+  document.getElementById('mc-secret-note').textContent = spec.secret_note || '';
+  const cfgPrev = window._mcEditing?.config || {};
+  document.getElementById('mc-config-fields').innerHTML = (spec.config_fields || []).map(f =>
+    `<div class="form-group"><label>${esc(f.label)}${f.required ? ' *' : ''}</label>
+     <input type="text" data-cfg="${f.key}" placeholder="${esc(f.placeholder||'')}" value="${esc(cfgPrev[f.key] ?? '')}"></div>`).join('');
+  const setKeys = window._mcEditing?.secret_fields_set || [];
+  document.getElementById('mc-secret-fields').innerHTML = (spec.secret_fields || []).map(f => {
+    const isSet = setKeys.includes(f.key);
+    return `<div class="form-group"><label>${esc(f.label)}${f.required ? ' *' : ''}</label>
+     <input type="password" data-secret="${f.key}" placeholder="${isSet ? '•••••••• (leave blank to keep)' : ''}"></div>`;
+  }).join('');
+  document.getElementById('mc-test-btn').style.display = window._mcEditing ? 'inline-flex' : 'none';
+}
+
+async function openConnectorModal(id) {
+  await ensureCatalog();
+  const editing = id ? CONNECTORS.find(c => c.id === id) : null;
+  window._mcEditing = editing || null;
+  document.getElementById('mc-title').textContent = editing ? 'Edit model connector' : 'Add model connector';
+  document.getElementById('mc-id').value = editing ? editing.id : '';
+  document.getElementById('mc-name').value = editing ? editing.name : '';
+  document.getElementById('mc-kind').value = editing ? editing.kind : 'llm';
+  document.getElementById('mc-model').value = editing ? editing.model_id : '';
+  const provSel = document.getElementById('mc-provider');
+  provSel.innerHTML = `<option value="${editing ? editing.provider : ''}"></option>`;
+  provSel.value = editing ? editing.provider : '';
+  const tr = document.getElementById('mc-test-result'); tr.style.display = 'none';
+  renderConnectorFields();
+  if (!editing) { // default provider selection for a fresh form
+    provSel.value = provSel.querySelector('option')?.value || '';
+    renderConnectorFields();
+  }
+  openModal('modal-connector');
+}
+
+function collectConnectorForm() {
+  const config = {}, secrets = {};
+  document.querySelectorAll('#mc-config-fields [data-cfg]').forEach(el => {
+    if (el.value !== '') config[el.dataset.cfg] = el.value.trim();
+  });
+  document.querySelectorAll('#mc-secret-fields [data-secret]').forEach(el => {
+    if (el.value !== '') secrets[el.dataset.secret] = el.value;
+  });
+  return {
+    kind: document.getElementById('mc-kind').value,
+    name: document.getElementById('mc-name').value.trim(),
+    provider: document.getElementById('mc-provider').value,
+    model_id: document.getElementById('mc-model').value.trim(),
+    config, secrets,
+  };
+}
+
+async function submitConnector() {
+  const id = document.getElementById('mc-id').value;
+  const payload = collectConnectorForm();
+  if (!payload.name) return toast('Name is required', 'error');
+  try {
+    if (id) {
+      await api('PUT', `/api/admin/model-connectors/${id}`, {
+        name: payload.name, model_id: payload.model_id,
+        config: payload.config, secrets: payload.secrets,
+      });
+    } else {
+      await api('POST', '/api/admin/model-connectors', payload);
+    }
+    toast('Connector saved', 'success');
+    closeModal('modal-connector');
+    loadModelConnectors();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function testConnector(id) {
+  toast('Testing connector…', 'info');
+  try {
+    const res = await api('POST', `/api/admin/model-connectors/${id}/test`);
+    toast(res.ok ? `OK — ${res.detail}` : `Failed — ${res.detail}`, res.ok ? 'success' : 'error');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function testConnectorFromModal() {
+  const id = document.getElementById('mc-id').value;
+  if (!id) return;
+  const tr = document.getElementById('mc-test-result');
+  tr.style.display = 'block';
+  tr.style.background = 'var(--paper)'; tr.style.color = 'var(--ink-soft)';
+  tr.textContent = 'Testing…';
+  try {
+    const res = await api('POST', `/api/admin/model-connectors/${id}/test`);
+    tr.style.background = res.ok ? 'var(--green-dim)' : 'var(--amber-dim)';
+    tr.style.color = res.ok ? '#116329' : '#92580A';
+    tr.textContent = (res.ok ? 'OK — ' : 'Failed — ') + res.detail;
+  } catch(e) { tr.textContent = e.message; tr.style.background = 'var(--amber-dim)'; }
+}
+
+async function deleteConnector(id) {
+  if (!confirm('Delete this connector?')) return;
+  try {
+    await api('DELETE', `/api/admin/model-connectors/${id}`);
+    toast('Connector deleted', 'success');
+    loadModelConnectors();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── Settings ───────────────────────────────────────────────────────
 
 function optionHtml(items, selected) {
   return (items || []).map(i => {
@@ -1608,16 +1821,28 @@ function updateModelWarning() {
 
 async function loadSettings() {
   try {
-    const [catalog, cfg] = await Promise.all([
-      MODEL_CATALOG ? Promise.resolve(MODEL_CATALOG) : api('GET', '/api/admin/model-catalog'),
-      api('GET', '/api/admin/config')
+    const [catalog, cfg, connectors] = await Promise.all([
+      ensureCatalog(),
+      api('GET', '/api/admin/config'),
+      api('GET', '/api/admin/model-connectors'),
     ]);
     MODEL_CATALOG = catalog;
+    CONNECTORS = connectors;
+    SETTINGS_CFG = cfg;
+    const ov = cfg.tenant_overrides || {};
 
     document.getElementById('set-profile').innerHTML = optionHtml(catalog.profiles, cfg.model_profile);
     document.getElementById('set-embedding-model').innerHTML = optionHtml(catalog.embedding_models, cfg.embedding_model);
     document.getElementById('set-llm-model').innerHTML = optionHtml(catalog.llm_models, cfg.llm_model);
     document.getElementById('set-reranker-model').innerHTML = optionHtml(catalog.reranker_models, cfg.reranker_model);
+
+    const connOpts = (kind) => `<option value="">Built-in local model</option>` +
+      connectors.filter(c => c.kind === kind)
+        .map(c => `<option value="${c.id}">${esc(c.name)} — ${esc((catalog.connector_providers[c.provider]||{}).label||c.provider)} (${esc(c.model_id||'')})</option>`).join('');
+    document.getElementById('set-llm-connector').innerHTML = connOpts('llm');
+    document.getElementById('set-embedding-connector').innerHTML = connOpts('embedding');
+    document.getElementById('set-llm-connector').value = String(ov.llm_connector_id || '');
+    document.getElementById('set-embedding-connector').value = String(ov.embedding_connector_id || '');
 
     document.getElementById('set-profile').value = cfg.model_profile || 'enterprise_balanced';
     document.getElementById('set-embedding-model').value = cfg.embedding_model;
@@ -1631,6 +1856,20 @@ async function loadSettings() {
     document.getElementById('set-max-tokens').value = cfg.llm_max_tokens;
     document.getElementById('set-temp').value = cfg.llm_temperature;
 
+    // Embedding config is immutable once documents are indexed.
+    const locked = !!cfg.embedding_locked;
+    const lockNotice = document.getElementById('embedding-lock-notice');
+    document.getElementById('set-embedding-connector').disabled = locked;
+    document.getElementById('set-embedding-model').disabled = locked;
+    if (locked) {
+      lockNotice.style.display = 'block';
+      lockNotice.textContent = '🔒 ' + (cfg.embedding_locked_reason || 'Embedding model is locked.') +
+        ' Current: ' + (cfg.embedding_connector ? cfg.embedding_connector.name : (cfg.embedding_model || 'built-in'));
+    } else {
+      lockNotice.style.display = 'none';
+    }
+
+    onConnectorSelectChange();
     const p = selectedProfile();
     document.getElementById('profile-description').textContent = p?.description || '';
     updateModelWarning();
@@ -1661,22 +1900,50 @@ async function loadSettings() {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+let SETTINGS_CFG = null;
+
+function onConnectorSelectChange() {
+  const llmConn = document.getElementById('set-llm-connector').value;
+  const embConn = document.getElementById('set-embedding-connector').value;
+  document.getElementById('builtin-llm-group').style.display = llmConn ? 'none' : 'block';
+  document.getElementById('builtin-embedding-group').style.display = embConn ? 'none' : 'block';
+}
+
 async function saveSettings() {
+  const llmConn = document.getElementById('set-llm-connector').value;
+  const embConn = document.getElementById('set-embedding-connector').value;
+  const locked = !!SETTINGS_CFG?.embedding_locked;
+
   const settings = {
     model_profile: document.getElementById('set-profile').value,
-    embedding_provider: 'local',
-    embedding_model: document.getElementById('set-embedding-model').value,
     reranker_enabled: document.getElementById('set-reranker-enabled').checked,
     reranker_model: document.getElementById('set-reranker-model').value,
     rerank_top_k: parseInt(document.getElementById('set-rerank-topk').value),
-    llm_provider: document.getElementById('set-llm-model').value === 'none' ? 'none' : 'ollama',
-    llm_model: document.getElementById('set-llm-model').value,
     retrieval_top_k: parseInt(document.getElementById('set-topk').value),
     retrieval_score_threshold: parseFloat(document.getElementById('set-threshold').value),
     retrieval_max_context_chars: parseInt(document.getElementById('set-context').value),
     llm_max_tokens: parseInt(document.getElementById('set-max-tokens').value),
-    llm_temperature: parseFloat(document.getElementById('set-temp').value)
+    llm_temperature: parseFloat(document.getElementById('set-temp').value),
+    llm_connector_id: llmConn || '',
   };
+
+  if (!llmConn) {
+    // No connector: fall back to the built-in Ollama / none path.
+    settings.llm_provider = document.getElementById('set-llm-model').value === 'none' ? 'none' : 'ollama';
+    settings.llm_model = document.getElementById('set-llm-model').value;
+  }
+  // When a connector IS selected, llm_provider/llm_model are resolved from it
+  // at request time, so we leave whatever is stored untouched.
+
+  // Never send embedding changes once locked — the backend would reject them.
+  if (!locked) {
+    settings.embedding_connector_id = embConn || '';
+    if (!embConn) {
+      settings.embedding_provider = 'local';
+      settings.embedding_model = document.getElementById('set-embedding-model').value;
+    }
+  }
+
   try {
     const res = await api('PUT', '/api/admin/settings', {settings});
     toast(res.note || 'Tenant model settings saved', res.note ? 'warning' : 'success');

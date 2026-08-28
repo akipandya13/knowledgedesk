@@ -66,6 +66,23 @@ services:
       ollama-init:
         condition: service_completed_successfully
 
+  # ── Next.js web client ─────────────────────────────────────────────
+  # Distributed frontend that consumes every backend API. It proxies
+  # /api/* to the FastAPI service so the browser only ever talks to :3000.
+  web:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the Next standalone server at build time.
+        API_PROXY_TARGET: http://app:8000
+    container_name: kd-web
+    environment:
+      - NODE_ENV=production
+    ports:
+      - "3000:3000"
+    depends_on:
+      - app
+
 volumes:
   qdrant_data:
   ollama_data:

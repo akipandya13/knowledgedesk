@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from ..database import SessionLocal, Document, Tenant
-from ..tenant_settings import effective_settings
+from ..tenant_settings import resolve_model_config
 from . import embeddings, vectorstore
 from .chunking import chunk_pages
 from .parsers import parse_file
@@ -36,13 +36,14 @@ def ingest_document(doc_id: int, tenant_slug: str, filename: str, data: bytes) -
             raise ValueError("Document produced no usable chunks")
 
         tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
-        model_cfg = effective_settings(tenant)
+        model_cfg = resolve_model_config(tenant, db)
         embedding_provider = model_cfg.get("embedding_provider", "local")
         embedding_model = model_cfg.get("embedding_model")
         vectors = embeddings.embed_texts(
             [c.text for c in chunks],
             provider=embedding_provider,
             model_name=embedding_model,
+            runtime=model_cfg,
         )
         vectorstore.upsert_chunks(
             tenant_slug, doc_id, filename, chunks, vectors,
@@ -63,6 +64,20 @@ def ingest_document(doc_id: int, tenant_slug: str, filename: str, data: bytes) -
         doc.status = "ready"
         doc.pages = len(pages)
         doc.chunk_count = len(chunks)
+
+        # Snapshot the embedding identity this workspace is now locked to. The
+        # lock itself is enforced by the presence of a ready document; this is
+        # for display / diagnostics in the admin UI.
+        if tenant is not None:
+            snap = dict(tenant.settings_json or {})
+            if not snap.get("embedding_locked_to"):
+                snap["embedding_locked_to"] = {
+                    "provider": embedding_provider,
+                    "model": embedding_model or "",
+                    "connector_id": snap.get("embedding_connector_id"),
+                }
+                tenant.settings_json = snap
+                db.merge(tenant)
         db.commit()
         log.info("Ingested %s (%d chunks)", filename, len(chunks))
     except Exception as e:  # noqa: BLE001 — surface every failure on the document row

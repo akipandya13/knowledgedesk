@@ -116,6 +116,12 @@ def _enforce_safe_model_defaults(db) -> None:
     for tenant in db.query(Tenant).all():
         cfg = dict(tenant.settings_json or {})
 
+        # A tenant that has picked an explicit model connector is managing its
+        # own backend (Bedrock / Azure / hosted / configured local). Laptop-safe
+        # downgrades target accidental multi-GB local downloads and do not apply.
+        if cfg.get("llm_connector_id") or cfg.get("embedding_connector_id"):
+            continue
+
         # Existing premium settings from earlier builds should not survive on a
         # MacBook/demo setup unless explicitly allowed. In laptop-safe mode we
         # also downgrade larger Ollama models such as gemma3:12b because the

@@ -11,7 +11,7 @@ from typing import AsyncIterator
 
 from ..config import get_settings
 from ..database import SessionLocal, QueryLog, Tenant
-from ..tenant_settings import effective_settings, as_bool
+from ..tenant_settings import effective_settings, resolve_model_config, as_bool
 from . import embeddings, llm, vectorstore, reranker
 
 NOT_FOUND_MESSAGE = ("I couldn't find anything in the company knowledge base that "
@@ -22,13 +22,14 @@ MODEL_BLOCKED_PREFIX = "Model configuration needs admin attention"
 
 
 def retrieve(tenant: Tenant, question: str, filters: dict | None = None) -> list[dict]:
-    cfg = effective_settings(tenant)
+    cfg = resolve_model_config(tenant)
     top_k = int(cfg.get("retrieval_top_k", get_settings().retrieval_top_k))
     threshold = float(cfg.get("retrieval_score_threshold", get_settings().retrieval_score_threshold))
     embedding_provider = cfg.get("embedding_provider", "local")
     embedding_model = cfg.get("embedding_model")
 
-    vector = embeddings.embed_query(question, provider=embedding_provider, model_name=embedding_model)
+    vector = embeddings.embed_query(question, provider=embedding_provider,
+                                    model_name=embedding_model, runtime=cfg)
     hits = vectorstore.search(
         tenant.slug,
         vector,
@@ -141,11 +142,11 @@ def _log(tenant_id: int, question: str, answer: str, mode: str,
 
 async def answer(tenant: Tenant, question: str, filters: dict | None = None) -> dict:
     s = get_settings()
-    cfg = effective_settings(tenant)
+    cfg = resolve_model_config(tenant)
     t0 = time.time()
     try:
         hits = retrieve(tenant, question, filters)
-    except embeddings.ModelLoadBlocked as exc:
+    except (embeddings.ModelLoadBlocked, embeddings.EmbeddingError) as exc:
         text = _blocked_model_answer(exc)
         qid = _log(tenant.id, question, text, "model_blocked", 0.0,
                    int((time.time() - t0) * 1000), [], filters)
@@ -179,11 +180,11 @@ async def answer(tenant: Tenant, question: str, filters: dict | None = None) -> 
 async def answer_stream(tenant: Tenant, question: str, filters: dict | None = None) -> AsyncIterator[dict]:
     """Yields events: {type: meta|token|done, ...} for SSE streaming."""
     s = get_settings()
-    cfg = effective_settings(tenant)
+    cfg = resolve_model_config(tenant)
     t0 = time.time()
     try:
         hits = retrieve(tenant, question, filters)
-    except embeddings.ModelLoadBlocked as exc:
+    except (embeddings.ModelLoadBlocked, embeddings.EmbeddingError) as exc:
         text = _blocked_model_answer(exc)
         qid = _log(tenant.id, question, text, "model_blocked", 0.0,
                    int((time.time() - t0) * 1000), [], filters)

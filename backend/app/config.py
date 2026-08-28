@@ -21,6 +21,11 @@ class Settings(BaseSettings):
 
     # Security — JWT user authentication
     jwt_secret: str = ""                  # empty → auto-generated & persisted in DATA_DIR
+
+    # Security — model connector credential encryption (Fernet master key).
+    # Empty → auto-generated & persisted to {data_dir}/secret.key. In production
+    # this should be supplied from a KMS / secrets manager, not a file.
+    kd_secret_key: str = ""
     access_token_minutes: int = 30
     refresh_token_days: int = 14
     password_min_length: int = 10
