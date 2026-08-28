@@ -65,6 +65,26 @@ class Document(Base):
     tenant = relationship("Tenant", back_populates="documents")
 
 
+class ModelConnector(Base):
+    """A tenant-defined backend for LLM generation or embeddings.
+
+    provider ∈ {bedrock, azure_foundry, ollama, openai_compatible, none}
+    secret_encrypted is a Fernet token (see app.crypto); never stored plaintext.
+    """
+    __tablename__ = "model_connectors"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    kind = Column(String, nullable=False)                   # llm | embedding
+    name = Column(String, nullable=False)
+    provider = Column(String, nullable=False)
+    model_id = Column(String, default="")                   # provider-native model identifier
+    config_json = Column(JSON, default=dict)                # non-secret params (region, endpoint, dimensions, ...)
+    secret_encrypted = Column(Text, default="")             # Fernet token → {api_key?, aws_*?}
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 # ── Roles ────────────────────────────────────────────────────────────
 # member       — asks questions, sees the document list, gives feedback
 # tenant_admin — everything a member can, plus documents, users, settings,

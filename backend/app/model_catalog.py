@@ -137,9 +137,77 @@ MODEL_SETTING_KEYS = {
     "embedding_provider", "embedding_model",
     "reranker_enabled", "reranker_model", "rerank_top_k",
     "llm_provider", "llm_model", "openai_model",
+    "llm_connector_id", "embedding_connector_id",
     "retrieval_top_k", "retrieval_score_threshold", "retrieval_max_context_chars",
     "llm_temperature", "llm_max_tokens", "answer_language",
 }
+
+# ── Model connectors ────────────────────────────────────────────────
+# Describes the fields each connector provider needs. `config` fields are
+# stored in ModelConnector.config_json; `secret` fields are Fernet-encrypted
+# into ModelConnector.secret_encrypted and never returned by the API.
+CONNECTOR_PROVIDERS = {
+    "bedrock": {
+        "label": "AWS Bedrock",
+        "kinds": ["llm", "embedding"],
+        "model_id_hint": "llm: anthropic.claude-3-5-sonnet-20240620-v1:0 · embedding: amazon.titan-embed-text-v2:0",
+        "config_fields": [
+            {"key": "region", "label": "AWS region", "required": True, "placeholder": "us-east-1"},
+            {"key": "dimensions", "label": "Embedding dimensions (embedding only)", "required": False, "placeholder": "1024"},
+        ],
+        "secret_fields": [
+            {"key": "aws_access_key_id", "label": "AWS access key ID", "required": False},
+            {"key": "aws_secret_access_key", "label": "AWS secret access key", "required": False},
+            {"key": "aws_session_token", "label": "AWS session token (optional)", "required": False},
+        ],
+        "secret_note": "Leave AWS keys blank to use the host's default credential chain (IAM role, ~/.aws).",
+    },
+    "azure_foundry": {
+        "label": "Azure AI Foundry",
+        "kinds": ["llm", "embedding"],
+        "model_id_hint": "the underlying model name, e.g. gpt-4o or text-embedding-3-large",
+        "config_fields": [
+            {"key": "endpoint", "label": "Resource endpoint", "required": True, "placeholder": "https://my-resource.openai.azure.com"},
+            {"key": "deployment", "label": "Deployment name", "required": True, "placeholder": "gpt-4o"},
+            {"key": "api_version", "label": "API version", "required": True, "placeholder": "2024-06-01"},
+            {"key": "dimensions", "label": "Embedding dimensions (embedding only)", "required": False, "placeholder": "3072"},
+        ],
+        "secret_fields": [
+            {"key": "api_key", "label": "API key", "required": True},
+        ],
+    },
+    "ollama": {
+        "label": "Local — Ollama (SLM / MLM)",
+        "kinds": ["llm", "embedding"],
+        "model_id_hint": "gemma3:4b (SLM) · gemma3:12b (MLM) · nomic-embed-text (embedding)",
+        "config_fields": [
+            {"key": "base_url", "label": "Ollama URL", "required": False, "placeholder": "http://ollama:11434"},
+            {"key": "size_class", "label": "Size class", "required": False, "placeholder": "slm | mlm"},
+        ],
+        "secret_fields": [],
+    },
+    "openai_compatible": {
+        "label": "Local / hosted — OpenAI-compatible endpoint",
+        "kinds": ["llm", "embedding"],
+        "model_id_hint": "model name the endpoint expects, e.g. gpt-4o-mini",
+        "config_fields": [
+            {"key": "base_url", "label": "Base URL (/v1)", "required": True, "placeholder": "http://vllm:8000/v1"},
+            {"key": "dimensions", "label": "Embedding dimensions (embedding only)", "required": False},
+        ],
+        "secret_fields": [
+            {"key": "api_key", "label": "API key (optional for local)", "required": False},
+        ],
+    },
+    "none": {
+        "label": "None — extractive answers, no LLM",
+        "kinds": ["llm"],
+        "model_id_hint": "",
+        "config_fields": [],
+        "secret_fields": [],
+    },
+}
+
+REMOTE_CONNECTOR_PROVIDERS = {"bedrock", "azure_foundry", "openai_compatible"}
 
 HEAVY_LOCAL_MODELS = {
     "Qwen/Qwen3-Embedding-4B": "Qwen3 Embedding 4B is a premium GPU-size embedding model and will download multiple large safetensor shards.",
@@ -181,6 +249,7 @@ def catalog_payload() -> dict[str, Any]:
         "large_ollama_models": LARGE_OLLAMA_MODELS,
         "safe_demo_ollama_models": sorted(SAFE_DEMO_OLLAMA_MODELS),
         "optional_reranker_models": OPTIONAL_RERANKER_MODELS,
+        "connector_providers": CONNECTOR_PROVIDERS,
     }
 
 

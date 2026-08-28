@@ -58,7 +58,7 @@ def search(req: AskRequest, tenant=Depends(get_tenant)):
     """Raw semantic search — passages only, no LLM. Instant, zero cost."""
     try:
         hits = rag.retrieve(tenant, req.question.strip(), req.filters.clean() if req.filters else None)
-    except rag.embeddings.ModelLoadBlocked as exc:
+    except (rag.embeddings.ModelLoadBlocked, rag.embeddings.EmbeddingError) as exc:
         raise HTTPException(status_code=409, detail=rag._blocked_model_answer(exc)) from exc
     return {"results": rag._sources(hits)}
 
