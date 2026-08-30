@@ -1,86 +1,273 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { getConnectorStatus, syncConnector } from "@/lib/api/connectors";
-import type { ConnectorStatus } from "@/lib/types";
-import { Card, Loading, PageHeader } from "@/components/ui";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  deleteConnector,
+  getConnectorProviders,
+  getConnectorStatus,
+  getSyncRuns,
+  listConnectors,
+  syncConnector,
+  testConnector,
+} from "@/lib/api/connectors";
+import type {
+  ConnectorStatus,
+  ConnectorSyncRun,
+  DataConnector,
+  DataConnectorProviderSpec,
+} from "@/lib/types";
+import {
+  Empty,
+  Loading,
+  Notice,
+  PageHeader,
+  StatusBadge,
+  TableWrap,
+  fmtDate,
+} from "@/components/ui";
+import { DataConnectorModal } from "@/components/DataConnectorModal";
+import { IconTrash } from "@/components/icons";
 import { useToast } from "@/components/Toast";
-
-const SOURCES: { key: "gdrive" | "sharepoint"; name: string; env: string; blurb: string }[] = [
-  {
-    key: "gdrive",
-    name: "Google Drive",
-    env: "GDRIVE_ACCESS_TOKEN, GDRIVE_FOLDER_ID",
-    blurb: "Pull documents from a shared Drive folder.",
-  },
-  {
-    key: "sharepoint",
-    name: "SharePoint",
-    env: "MSGRAPH_* credentials",
-    blurb: "Sync from a SharePoint document library via Microsoft Graph.",
-  },
-];
 
 export default function ConnectorsPage() {
   const { toast } = useToast();
-  const [status, setStatus] = useState<ConnectorStatus | null>(null);
-  const [busy, setBusy] = useState<string>("");
+  const [providers, setProviders] = useState<Record<string, DataConnectorProviderSpec> | null>(null);
+  const [rows, setRows] = useState<DataConnector[] | null>(null);
+  const [legacy, setLegacy] = useState<ConnectorStatus | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState<DataConnector | null>(null);
+  const [expanded, setExpanded] = useState<number | null>(null);
+  const [runs, setRuns] = useState<ConnectorSyncRun[]>([]);
+  const [busy, setBusy] = useState<number | null>(null);
 
-  useEffect(() => {
-    getConnectorStatus()
-      .then(setStatus)
-      .catch((e) => toast(e.message, "error"));
+  const refresh = useCallback(() => {
+    listConnectors()
+      .then(setRows)
+      .catch((e) => {
+        setRows([]);
+        toast(e.message, "error");
+      });
   }, [toast]);
 
-  async function sync(kind: "gdrive" | "sharepoint") {
-    setBusy(kind);
+  useEffect(() => {
+    getConnectorProviders().then(setProviders).catch((e) => toast(e.message, "error"));
+    getConnectorStatus().then(setLegacy).catch(() => undefined);
+    refresh();
+  }, [refresh, toast]);
+
+  const anyRunning = useMemo(
+    () => (rows || []).some((c) => c.last_sync_status === "running"),
+    [rows],
+  );
+
+  useEffect(() => {
+    if (!anyRunning) return;
+    const id = setInterval(() => {
+      refresh();
+      if (expanded != null) getSyncRuns(expanded).then(setRuns).catch(() => undefined);
+    }, 3000);
+    return () => clearInterval(id);
+  }, [anyRunning, refresh, expanded]);
+
+  async function onTest(c: DataConnector) {
+    setBusy(c.id);
     try {
-      const res = await syncConnector(kind);
-      toast(`${res.queued} file(s) queued from ${kind}`, "success");
+      const res = await testConnector(c.id);
+      toast(res.ok ? `OK — ${res.detail}` : `Failed — ${res.detail}`, res.ok ? "success" : "error");
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Sync failed", "error");
+      toast(e instanceof Error ? e.message : "Test failed", "error");
     } finally {
-      setBusy("");
+      setBusy(null);
     }
   }
 
-  if (!status) return <Loading />;
+  async function onSync(c: DataConnector) {
+    setBusy(c.id);
+    try {
+      await syncConnector(c.id);
+      toast("Sync started", "success");
+      refresh();
+      if (expanded === c.id) getSyncRuns(c.id).then(setRuns);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Sync failed", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onDelete(c: DataConnector) {
+    if (!confirm(`Delete connector "${c.name}"? Ingested documents are kept.`)) return;
+    try {
+      await deleteConnector(c.id);
+      toast("Connector deleted", "success");
+      if (expanded === c.id) setExpanded(null);
+      refresh();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Delete failed", "error");
+    }
+  }
+
+  function toggleRuns(id: number) {
+    if (expanded === id) {
+      setExpanded(null);
+      return;
+    }
+    setExpanded(id);
+    setRuns([]);
+    getSyncRuns(id).then(setRuns).catch(() => undefined);
+  }
+
+  if (!providers || !rows) return <Loading />;
+
+  const legacyConfigured =
+    legacy && (legacy.gdrive.configured || legacy.sharepoint.configured);
 
   return (
     <>
       <PageHeader
         title="Data connectors"
-        subtitle="Bulk-ingest documents from external sources. Credentials are configured in the backend .env."
+        subtitle="Pull documents from Google Drive and SharePoint into this workspace. Credentials are encrypted at rest and never leave the server."
+        actions={
+          <button
+            className="btn"
+            onClick={() => {
+              setEditing(null);
+              setModalOpen(true);
+            }}
+          >
+            + Add connector
+          </button>
+        }
       />
-      <div className="two-col">
-        {SOURCES.map((s) => {
-          const configured = status[s.key].configured;
-          return (
-            <Card key={s.key} title={s.name}>
-              <p className="small muted" style={{ marginBottom: 14 }}>
-                {s.blurb}
-              </p>
-              <div className="row" style={{ marginBottom: 14 }}>
-                <span className={`badge ${configured ? "green" : "amber"}`}>
-                  {configured ? "configured" : "not configured"}
-                </span>
-              </div>
-              {!configured && (
-                <div className="hint" style={{ marginBottom: 12 }}>
-                  Set {s.env} in the backend environment to enable this connector.
-                </div>
+
+      {legacyConfigured && (
+        <Notice kind="info">
+          Legacy <span className="mono">.env</span> connectors are configured
+          {legacy?.gdrive.configured ? " (Google Drive)" : ""}
+          {legacy?.sharepoint.configured ? " (SharePoint)" : ""}. Prefer the
+          per-workspace connectors below.
+        </Notice>
+      )}
+
+      {rows.length === 0 ? (
+        <Empty>No connectors yet. Add one to sync from Google Drive or SharePoint.</Empty>
+      ) : (
+        <TableWrap
+          head={
+            <>
+              <th>Name</th>
+              <th>Provider</th>
+              <th>Last sync</th>
+              <th>Secrets set</th>
+              <th />
+            </>
+          }
+        >
+          {rows.map((c) => (
+            <Fragment key={c.id}>
+              <tr>
+                <td style={{ fontWeight: 600 }}>{c.name}</td>
+                <td>{providers[c.provider]?.label || c.provider}</td>
+                <td>
+                  {c.last_sync_status ? (
+                    <>
+                      <StatusBadge value={c.last_sync_status} />{" "}
+                      <span className="small muted">
+                        {c.last_sync_at ? fmtDate(c.last_sync_at) : ""}
+                      </span>
+                      {c.last_sync_detail && (
+                        <div className="small muted">{c.last_sync_detail}</div>
+                      )}
+                    </>
+                  ) : (
+                    <span className="small muted">never</span>
+                  )}
+                </td>
+                <td className="small muted">
+                  {c.secret_fields_set.length ? c.secret_fields_set.join(", ") : "—"}
+                </td>
+                <td>
+                  <div className="row" style={{ gap: 6 }}>
+                    <button
+                      className="btn ghost sm"
+                      disabled={busy === c.id}
+                      onClick={() => onTest(c)}
+                    >
+                      Test
+                    </button>
+                    <button
+                      className="btn sm"
+                      disabled={busy === c.id || c.last_sync_status === "running"}
+                      onClick={() => onSync(c)}
+                    >
+                      {c.last_sync_status === "running" ? "Syncing…" : "Sync now"}
+                    </button>
+                    <button className="btn ghost sm" onClick={() => toggleRuns(c.id)}>
+                      {expanded === c.id ? "Hide runs" : "Runs"}
+                    </button>
+                    <button
+                      className="btn ghost sm"
+                      onClick={() => {
+                        setEditing(c);
+                        setModalOpen(true);
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button className="btn danger sm" onClick={() => onDelete(c)} aria-label="Delete">
+                      <IconTrash />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              {expanded === c.id && (
+                <tr>
+                  <td colSpan={5} style={{ background: "var(--paper)" }}>
+                    {runs.length === 0 ? (
+                      <div className="small muted">No sync runs yet.</div>
+                    ) : (
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Started</th>
+                            <th>Status</th>
+                            <th>Queued</th>
+                            <th>Skipped</th>
+                            <th>Failed</th>
+                            <th>Detail</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {runs.map((r) => (
+                            <tr key={r.id}>
+                              <td className="small muted">{fmtDate(r.started_at)}</td>
+                              <td>
+                                <StatusBadge value={r.status} />
+                              </td>
+                              <td>{r.queued}</td>
+                              <td>{r.skipped}</td>
+                              <td>{r.failed}</td>
+                              <td className="small muted">{r.detail}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </td>
+                </tr>
               )}
-              <button
-                className="btn"
-                disabled={!configured || busy === s.key}
-                onClick={() => sync(s.key)}
-              >
-                {busy === s.key ? "Syncing…" : "Sync now"}
-              </button>
-            </Card>
-          );
-        })}
-      </div>
+            </Fragment>
+          ))}
+        </TableWrap>
+      )}
+
+      <DataConnectorModal
+        open={modalOpen}
+        editing={editing}
+        providers={providers}
+        onClose={() => setModalOpen(false)}
+        onSaved={refresh}
+      />
     </>
   );
 }

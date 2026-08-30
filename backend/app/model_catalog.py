@@ -209,6 +209,44 @@ CONNECTOR_PROVIDERS = {
 
 REMOTE_CONNECTOR_PROVIDERS = {"bedrock", "azure_foundry", "openai_compatible"}
 
+
+# ── Data connectors (per-workspace external document sources) ───────
+# Same field-spec shape as CONNECTOR_PROVIDERS. `multiline` renders a textarea.
+DATA_CONNECTOR_PROVIDERS = {
+    "gdrive": {
+        "label": "Google Drive",
+        "config_fields": [
+            {"key": "folder_id", "label": "Folder ID", "required": True,
+             "placeholder": "the long id from the folder URL"},
+            {"key": "impersonate_email", "label": "Impersonate user (domain-wide delegation)",
+             "required": False, "placeholder": "optional — user@company.com"},
+        ],
+        "secret_fields": [
+            {"key": "service_account_json", "label": "Service account key (JSON)",
+             "required": True, "multiline": True},
+        ],
+        "secret_note": "Create a service account in Google Cloud, enable the Drive API, then either "
+                       "share the target folder with the service-account email or configure "
+                       "domain-wide delegation and set an impersonation user above.",
+    },
+    "sharepoint": {
+        "label": "SharePoint / OneDrive (Microsoft Graph)",
+        "config_fields": [
+            {"key": "tenant_id", "label": "Directory (tenant) ID", "required": True},
+            {"key": "client_id", "label": "Application (client) ID", "required": True},
+            {"key": "site_id", "label": "SharePoint site ID", "required": True,
+             "placeholder": "contoso.sharepoint.com,<guid>,<guid>"},
+            {"key": "drive_id", "label": "Drive ID (optional)", "required": False,
+             "placeholder": "defaults to the site's document library"},
+        ],
+        "secret_fields": [
+            {"key": "client_secret", "label": "Client secret", "required": True},
+        ],
+        "secret_note": "Azure AD app registration with the Sites.Read.All application permission "
+                       "(admin-consented).",
+    },
+}
+
 HEAVY_LOCAL_MODELS = {
     "Qwen/Qwen3-Embedding-4B": "Qwen3 Embedding 4B is a premium GPU-size embedding model and will download multiple large safetensor shards.",
     "Qwen/Qwen3-Reranker-4B": "Qwen3 Reranker 4B is a premium GPU-size reranker model and will download multiple large safetensor shards.",

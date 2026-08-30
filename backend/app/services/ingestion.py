@@ -7,15 +7,70 @@ company's documents ingest in minutes, not hours).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 
+from ..config import get_settings
 from ..database import SessionLocal, Document, Tenant
 from ..tenant_settings import resolve_model_config
 from . import embeddings, vectorstore
 from .chunking import chunk_pages
-from .parsers import parse_file
+from .parsers import SUPPORTED_EXTENSIONS, parse_file
 
 log = logging.getLogger("knowledgedesk.ingest")
+
+
+# ── Shared upload/queue helpers (used by both the documents router and
+#    the connector sync worker so dedup + validation behave identically) ──
+
+def validate_file(name: str, data: bytes) -> str | None:
+    """Return a rejection reason, or None if the file is acceptable."""
+    s = get_settings()
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in SUPPORTED_EXTENSIONS:
+        return f"Unsupported type .{ext}"
+    if len(data) > s.max_upload_mb * 1024 * 1024:
+        return f"Larger than {s.max_upload_mb} MB limit"
+    return None
+
+
+def register_document(db, tenant, name: str, data: bytes, source: str,
+                      department: str = "", confidentiality: str = "internal",
+                      tags: list[str] | None = None) -> tuple[Document | None, str | None]:
+    """Create a queued Document row (no ingestion scheduled). Returns (doc, reason).
+
+    Skips files that fail validation or duplicate an existing active document
+    (by content hash) for the tenant.
+    """
+    reason = validate_file(name, data)
+    if reason:
+        return None, reason
+    digest = hashlib.sha256(data).hexdigest()
+    existing = (db.query(Document)
+                .filter(Document.tenant_id == tenant.id,
+                        Document.content_hash == digest,
+                        Document.is_active == True)  # noqa: E712
+                .first())
+    if existing:
+        return None, f"Duplicate of document #{existing.id} ({existing.filename})"
+    doc = Document(tenant_id=tenant.id, filename=name, source=source,
+                   status="queued", size_bytes=len(data), content_hash=digest,
+                   department=department or "", confidentiality=confidentiality or "internal",
+                   tags_json=tags or [])
+    db.add(doc)
+    db.commit()
+    return doc, None
+
+
+def queue_document(db, background, tenant, name: str, data: bytes, source: str,
+                   department: str = "", confidentiality: str = "internal",
+                   tags: list[str] | None = None) -> tuple[Document | None, str | None]:
+    """register_document + schedule ingestion on the FastAPI background queue."""
+    doc, reason = register_document(db, tenant, name, data, source,
+                                    department, confidentiality, tags)
+    if doc:
+        background.add_task(ingest_document, doc.id, tenant.slug, name, data)
+    return doc, reason
 
 
 def ingest_document(doc_id: int, tenant_slug: str, filename: str, data: bytes) -> None:

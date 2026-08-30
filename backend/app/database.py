@@ -85,6 +85,42 @@ class ModelConnector(Base):
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class DataConnector(Base):
+    """A tenant-defined external document source (Google Drive, SharePoint).
+
+    provider ∈ {gdrive, sharepoint}
+    secret_encrypted is a Fernet token (see app.crypto); never stored plaintext.
+    """
+    __tablename__ = "data_connectors"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    name = Column(String, nullable=False)
+    provider = Column(String, nullable=False)
+    config_json = Column(JSON, default=dict)                # non-secret params (folder_id, site_id, ...)
+    secret_encrypted = Column(Text, default="")             # Fernet token → {service_account_json? / client_secret?}
+    is_active = Column(Boolean, default=True)
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_status = Column(String, default="")           # running | success | partial | failed
+    last_sync_detail = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ConnectorSyncRun(Base):
+    """One execution of a DataConnector sync — kept for history in the UI."""
+    __tablename__ = "connector_sync_runs"
+    id = Column(Integer, primary_key=True)
+    connector_id = Column(Integer, ForeignKey("data_connectors.id"), index=True)
+    tenant_id = Column(Integer, index=True)
+    status = Column(String, default="running")              # running | success | partial | failed
+    queued = Column(Integer, default=0)
+    skipped = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    detail = Column(Text, default="")
+    started_at = Column(DateTime, default=utcnow)
+    finished_at = Column(DateTime, nullable=True)
+
+
 # ── Roles ────────────────────────────────────────────────────────────
 # member       — asks questions, sees the document list, gives feedback
 # tenant_admin — everything a member can, plus documents, users, settings,

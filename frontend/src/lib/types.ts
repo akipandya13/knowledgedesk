@@ -178,6 +178,7 @@ export interface ConnectorField {
   label: string;
   required: boolean;
   placeholder?: string;
+  multiline?: boolean;
 }
 
 export interface ConnectorProviderSpec {
@@ -255,4 +256,40 @@ export interface EffectiveConfig {
 export interface ConnectorStatus {
   gdrive: { configured: boolean };
   sharepoint: { configured: boolean };
+  note?: string;
+}
+
+// ── Data connectors (external document sources) ───────────────────
+
+export interface DataConnectorProviderSpec {
+  label: string;
+  config_fields: ConnectorField[];
+  secret_fields: ConnectorField[];
+  secret_note?: string;
+}
+
+export interface DataConnector {
+  id: number;
+  name: string;
+  provider: string;
+  config: Record<string, string>;
+  is_active: boolean;
+  secret_fields_set: string[];
+  last_sync_at: string | null;
+  last_sync_status: string;
+  last_sync_detail: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ConnectorSyncRun {
+  id: number;
+  connector_id: number;
+  status: string;
+  queued: number;
+  skipped: number;
+  failed: number;
+  detail: string;
+  started_at: string | null;
+  finished_at: string | null;
 }
