@@ -99,6 +99,29 @@ class Settings(BaseSettings):
     ollama_url: str = "http://localhost:11434"
     data_dir: str = "/data"
 
+    # ── Observability ────────────────────────────────────────────────
+    # Open, pluggable monitoring. The metric registry is always on; where signals
+    # are also *sent* is chosen here. See docs/OBSERVABILITY.md.
+    observability_enabled: bool = True
+    # Comma list of sink names: noop | stdout | sqlite | prometheus | webhook | otlp
+    observability_sinks: str = "stdout,sqlite,prometheus"
+    observability_service_name: str = "knowledgedesk"
+    observability_sample_traces: float = 1.0          # 0..1 span sampling
+    observability_max_series: int = 2000              # per-metric cardinality cap
+    observability_health_probe_seconds: int = 30      # 0 disables the background probe
+
+    obs_stdout_pretty: bool = False
+    obs_stdout_metrics: bool = False                  # metrics are noisy on stdout
+    obs_sqlite_path: str = ""                         # default {DATA_DIR}/observability.db
+    obs_sqlite_retention_hours: int = 168
+    obs_prometheus_path: str = "/metrics"
+    obs_prometheus_token: str = ""                    # optional bearer for /metrics
+    obs_webhook_url: str = ""
+    obs_webhook_token: str = ""
+    obs_webhook_batch: int = 100
+    obs_otlp_endpoint: str = ""                       # e.g. http://otel-collector:4318
+    obs_otlp_headers: str = ""                        # "k=v,k2=v2"
+
 
 @lru_cache
 def get_settings() -> Settings:

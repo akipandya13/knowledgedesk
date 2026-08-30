@@ -10,7 +10,8 @@ from typing import List
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (Distance, FieldCondition, Filter,
-                                  MatchAny, MatchValue, PointStruct, VectorParams)
+                                  IsEmptyCondition, MatchAny, MatchValue,
+                                  PayloadField, PointStruct, VectorParams)
 
 from ..config import get_settings
 from ..model_catalog import safe_slug
@@ -76,6 +77,8 @@ def upsert_chunks(tenant_slug: str, doc_id: int, filename: str,
                 "model_profile": metadata.get("model_profile", ""),
                 "embedding_provider": embedding_provider,
                 "embedding_model": embedding_model or "",
+                "scope": metadata.get("scope", "tenant"),
+                "owner_user_id": metadata.get("owner_user_id"),
             },
         )
         for ch, vec in zip(chunks, vectors)
@@ -85,27 +88,60 @@ def upsert_chunks(tenant_slug: str, doc_id: int, filename: str,
                         points=points[i:i + 256])
 
 
-def _metadata_filter(filters: dict | None) -> Filter | None:
-    if not filters:
+def _access_condition(access: dict | None):
+    """A single OR-condition restricting hits to what the caller may read.
+
+    ``access`` = {"user_id": int|None, "scope": "workspace"|"company"|"all"}.
+    The result is enforced server-side and cannot be widened by the request.
+
+    Points written before the ownership model have no ``scope`` payload key; an
+    ``IsEmpty`` clause treats those as company-wide so nothing 404s mid-migration.
+    """
+    if not access:
         return None
+    uid = access.get("user_id")
+    want = (access.get("scope") or "all").lower()
+
+    company = [
+        FieldCondition(key="scope", match=MatchValue(value="tenant")),
+        IsEmptyCondition(is_empty=PayloadField(key="scope")),
+    ]
+    mine = ([FieldCondition(key="owner_user_id", match=MatchValue(value=uid))]
+            if uid is not None else [])
+
+    if want == "company":
+        should = company
+    elif want == "workspace":
+        should = mine or company        # a service key with no user falls back to company docs
+    else:                               # "all" — everything the caller can see
+        should = company + mine
+    return Filter(should=should)
+
+
+def _query_filter(filters: dict | None, access: dict | None) -> Filter | None:
     must = []
-    if filters.get("doc_ids"):
-        must.append(FieldCondition(key="doc_id", match=MatchAny(any=filters["doc_ids"])))
-    if filters.get("source"):
-        must.append(FieldCondition(key="source", match=MatchValue(value=filters["source"])))
-    if filters.get("filename"):
-        must.append(FieldCondition(key="filename", match=MatchValue(value=filters["filename"])))
-    if filters.get("department"):
-        must.append(FieldCondition(key="department", match=MatchValue(value=filters["department"])))
-    if filters.get("confidentiality"):
-        must.append(FieldCondition(key="confidentiality", match=MatchValue(value=filters["confidentiality"])))
+    if filters:
+        if filters.get("doc_ids"):
+            must.append(FieldCondition(key="doc_id", match=MatchAny(any=filters["doc_ids"])))
+        if filters.get("source"):
+            must.append(FieldCondition(key="source", match=MatchValue(value=filters["source"])))
+        if filters.get("filename"):
+            must.append(FieldCondition(key="filename", match=MatchValue(value=filters["filename"])))
+        if filters.get("department"):
+            must.append(FieldCondition(key="department", match=MatchValue(value=filters["department"])))
+        if filters.get("confidentiality"):
+            must.append(FieldCondition(key="confidentiality", match=MatchValue(value=filters["confidentiality"])))
+    access_cond = _access_condition(access)
+    if access_cond is not None:
+        must.append(access_cond)
     return Filter(must=must) if must else None
 
 
 def search(tenant_slug: str, vector: List[float], top_k: int,
            score_threshold: float, filters: dict | None = None,
            embedding_model: str | None = None,
-           embedding_provider: str | None = None):
+           embedding_provider: str | None = None,
+           access: dict | None = None):
     ensure_collection(
         tenant_slug,
         vector_size=len(vector),
@@ -115,7 +151,7 @@ def search(tenant_slug: str, vector: List[float], top_k: int,
     hits = client().query_points(
         collection_name=collection_name(tenant_slug, embedding_model, embedding_provider),
         query=vector,
-        query_filter=_metadata_filter(filters),
+        query_filter=_query_filter(filters, access),
         limit=top_k,
         score_threshold=score_threshold,
         with_payload=True,
@@ -128,6 +164,7 @@ def search(tenant_slug: str, vector: List[float], top_k: int,
             "page": h.payload.get("page"),
             "text": h.payload.get("text", ""),
             "embedding_model": h.payload.get("embedding_model", ""),
+            "scope": h.payload.get("scope", "tenant"),
         }
         for h in hits
     ]

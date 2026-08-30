@@ -3,9 +3,15 @@
 import { useRef, useState } from "react";
 import { sendFeedback, streamAsk } from "@/lib/api/query";
 import { ApiError } from "@/lib/api/client";
-import type { QuerySource } from "@/lib/types";
+import type { QuerySource, SearchScope } from "@/lib/types";
 import { PageHeader } from "@/components/ui";
 import { IconSend } from "@/components/icons";
+
+const SCOPES: { value: SearchScope; label: string; hint: string }[] = [
+  { value: "all", label: "Everything I can see", hint: "My workspace + company-wide documents" },
+  { value: "workspace", label: "My workspace", hint: "Only documents I uploaded" },
+  { value: "company", label: "Company-wide", hint: "Only documents an admin published" },
+];
 
 interface ChatMsg {
   role: "user" | "ai";
@@ -27,6 +33,7 @@ const STARTER_QUESTIONS = [
 
 export default function AskPage() {
   const [input, setInput] = useState("");
+  const [scope, setScope] = useState<SearchScope>("all");
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const [feedbackDone, setFeedbackDone] = useState<Record<number, boolean>>({});
@@ -59,7 +66,7 @@ export default function AskPage() {
       });
 
     try {
-      for await (const evt of streamAsk(question)) {
+      for await (const evt of streamAsk(question, undefined, undefined, scope)) {
         if (evt.type === "meta") {
           patchAi({ sources: evt.sources || [], confidence: evt.confidence || 0, mode: evt.mode });
         } else if (evt.type === "token") {
@@ -176,6 +183,22 @@ export default function AskPage() {
           </div>
         ))}
         <div ref={scrollRef} />
+      </div>
+
+      <div className="ask-scope" style={{ display: "flex", gap: 8, alignItems: "center", margin: "8px 0" }}>
+        <span className="small muted">Search in:</span>
+        <select
+          value={scope}
+          onChange={(e) => setScope(e.target.value as SearchScope)}
+          disabled={busy}
+          title={SCOPES.find((s) => s.value === scope)?.hint}
+        >
+          {SCOPES.map((s) => (
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
+          ))}
+        </select>
       </div>
 
       <form

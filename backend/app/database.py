@@ -28,6 +28,16 @@ def utcnow() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+# ── Document scope ───────────────────────────────────────────────────
+# tenant    — company-wide: published by a tenant_admin, visible to everyone
+#             in the workspace.
+# workspace — private: owned by one user (owner_user_id), visible only to that
+#             user and to tenant_admins.
+DOC_SCOPE_TENANT = "tenant"
+DOC_SCOPE_WORKSPACE = "workspace"
+DOC_SCOPES = {DOC_SCOPE_TENANT, DOC_SCOPE_WORKSPACE}
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
     id = Column(Integer, primary_key=True)
@@ -60,6 +70,9 @@ class Document(Base):
     embedding_model = Column(String, default="")
     version = Column(Integer, default=1)
     is_active = Column(Boolean, default=True)
+    # Ownership / visibility. owner_user_id is NULL for company-wide documents.
+    scope = Column(String, default=DOC_SCOPE_TENANT, index=True)   # tenant | workspace
+    owner_user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=utcnow)
 
     tenant = relationship("Tenant", back_populates="documents")
@@ -122,14 +135,20 @@ class ConnectorSyncRun(Base):
 
 
 # ── Roles ────────────────────────────────────────────────────────────
-# member       — asks questions, sees the document list, gives feedback
-# tenant_admin — everything a member can, plus documents, users, settings,
-#                connectors and insights for their own tenant
+# member       — asks questions, sees the document list, gives feedback,
+#                manages documents in their own workspace
+# tenant_admin — everything a member can, plus company-wide documents, users,
+#                settings, connectors and insights for their own tenant
 # superadmin   — platform operator: tenants, users, platform stats, audit.
 #                Deliberately has NO access to tenant document content.
+# service      — X-API-Key principal (machine integration); tenant_admin-level
+#                content access but cannot manage users. Not a human account.
+#
+# The authoritative capability model lives in app.rbac (ROLE_PERMISSIONS).
 ROLE_MEMBER = "member"
 ROLE_TENANT_ADMIN = "tenant_admin"
 ROLE_SUPERADMIN = "superadmin"
+ROLE_SERVICE = "service"
 TENANT_ROLES = {ROLE_MEMBER, ROLE_TENANT_ADMIN}
 ROLE_RANK = {ROLE_MEMBER: 1, ROLE_TENANT_ADMIN: 2, ROLE_SUPERADMIN: 3}
 
@@ -179,6 +198,7 @@ class QueryLog(Base):
     __tablename__ = "query_log"
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     question = Column(Text)
     answer = Column(Text)
     mode = Column(String, default="llm")                    # llm | extractive | not_found
@@ -211,8 +231,14 @@ def init_db() -> None:
     _add_column_if_missing("documents", "embedding_model", "embedding_model VARCHAR DEFAULT ''")
     _add_column_if_missing("documents", "version", "version INTEGER DEFAULT 1")
     _add_column_if_missing("documents", "is_active", "is_active BOOLEAN DEFAULT 1")
+    # Document ownership (added with the RBAC document-scope model). Existing rows
+    # default to company-wide (scope='tenant', owner_user_id=NULL) so nothing
+    # that was visible before disappears.
+    _add_column_if_missing("documents", "scope", "scope VARCHAR DEFAULT 'tenant'")
+    _add_column_if_missing("documents", "owner_user_id", "owner_user_id INTEGER")
     _add_column_if_missing("query_log", "filters_json", "filters_json JSON DEFAULT '{}'")
     _add_column_if_missing("query_log", "cost_estimate_usd", "cost_estimate_usd FLOAT DEFAULT 0.0")
+    _add_column_if_missing("query_log", "user_id", "user_id INTEGER")
 
 
 def new_api_key() -> str:

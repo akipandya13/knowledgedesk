@@ -1,20 +1,25 @@
 """KnowledgeDesk v1 — application entrypoint."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from .auth import get_db, get_tenant
+from . import observability as obs
+from .auth import get_db, tenant_ctx
 from .config import get_settings
-from .database import Document, SessionLocal, Tenant, User, init_db
+from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
+                       init_db)
+from .observability.middleware import ObservabilityMiddleware
+from .rbac import Permission
 from .routers import admin, connectors, documents, query
-from .routers import auth_routes, users as users_router
+from .routers import auth_routes, observability as observability_router, users as users_router
 from .services import llm, vectorstore
 from .services.ingestion import ingest_document
 from . import security
@@ -31,6 +36,9 @@ app = FastAPI(title=settings.app_name, version="1.0.0",
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                    allow_headers=["*"], expose_headers=["*"])
+# Observability is initialised before the middleware records anything.
+obs.setup(settings)
+app.add_middleware(ObservabilityMiddleware)
 
 # ── Routers ─────────────────────────────────────────────────────────
 app.include_router(auth_routes.router)
@@ -39,6 +47,19 @@ app.include_router(documents.router)
 app.include_router(query.router)
 app.include_router(admin.router)
 app.include_router(connectors.router)
+app.include_router(observability_router.router)
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics(authorization: str = Header(default="")):
+    """Prometheus text exposition. Enabled only with the `prometheus` sink;
+    optionally protected by OBS_PROMETHEUS_TOKEN."""
+    if "prometheus" not in obs.active_sinks():
+        raise HTTPException(404, "Prometheus sink not enabled")
+    token = settings.obs_prometheus_token
+    if token and authorization != f"Bearer {token}":
+        raise HTTPException(401, "metrics token required")
+    return PlainTextResponse(obs.render_prometheus(), media_type="text/plain; version=0.0.4")
 
 
 def _bootstrap_db(db) -> None:
@@ -162,8 +183,34 @@ def _enforce_safe_model_defaults(db) -> None:
         log.warning("Disabled stale tenant reranker settings for %s tenant(s) because laptop-safe mode is enabled.", reranker_disabled)
 
 
+_health_task: asyncio.Task | None = None
+
+
+async def _health_probe_loop(period: int) -> None:
+    """Refresh dependency-up gauges on a timer so monitoring sees outages even
+    when no one is using the app."""
+    while True:
+        try:
+            await _record_health()
+        except Exception:                       # never let the probe die
+            log.exception("observability health probe failed")
+        await asyncio.sleep(period)
+
+
+async def _record_health() -> dict:
+    qdrant_ok = vectorstore.healthy()
+    llm_state = ("ok" if await llm.is_available()
+                 else ("disabled" if settings.llm_provider == "none" else "down"))
+    obs.gauge("dependency.up", 1 if qdrant_ok else 0, dependency="qdrant",
+              help="1 = dependency reachable")
+    obs.gauge("dependency.up", 1 if llm_state == "ok" else 0, dependency="llm",
+              provider=settings.llm_provider)
+    return {"qdrant": "ok" if qdrant_ok else "down", "llm": llm_state}
+
+
 @app.on_event("startup")
 def startup() -> None:
+    global _health_task
     init_db()
     db = SessionLocal()
     try:
@@ -171,17 +218,30 @@ def startup() -> None:
         _enforce_safe_model_defaults(db)
     finally:
         db.close()
+    period = settings.observability_health_probe_seconds
+    if obs.is_enabled() and period > 0:
+        try:
+            _health_task = asyncio.get_running_loop().create_task(_health_probe_loop(period))
+        except RuntimeError:
+            log.warning("observability: no running loop at startup; health probe disabled")
     log.info("%s ready — LLM=%s/%s, embeddings=%s", settings.app_name,
              settings.llm_provider, settings.llm_model, settings.embedding_provider)
 
 
+@app.on_event("shutdown")
+def shutdown() -> None:
+    if _health_task:
+        _health_task.cancel()
+    obs.shutdown()
+
+
 @app.get("/api/health")
 async def health():
+    dep = await _record_health()
     return {
         "app": "ok",
-        "qdrant": "ok" if vectorstore.healthy() else "down",
-        "llm": ("ok" if await llm.is_available()
-                else ("disabled" if settings.llm_provider == "none" else "down")),
+        "qdrant": dep["qdrant"],
+        "llm": dep["llm"],
         "llm_provider": settings.llm_provider,
         "llm_model": settings.llm_model,
         "environment": settings.environment,
@@ -189,9 +249,10 @@ async def health():
 
 
 @app.post("/api/demo/seed")
-def seed_demo(background: BackgroundTasks, tenant=Depends(get_tenant),
+def seed_demo(background: BackgroundTasks,
+              tenant=Depends(tenant_ctx(Permission.DOC_WRITE_TENANT)),
               db=Depends(get_db)):
-    """Load the bundled sample company documents into this tenant."""
+    """Load the bundled sample company documents into this tenant (company-wide)."""
     sample_dir = Path("/app/sample_docs")
     if not sample_dir.exists():
         return {"queued": 0, "note": "sample_docs directory not mounted"}
@@ -203,7 +264,8 @@ def seed_demo(background: BackgroundTasks, tenant=Depends(get_tenant),
             continue
         data = path.read_bytes()
         doc = Document(tenant_id=tenant.id, filename=path.name, source="seed",
-                       status="queued", size_bytes=len(data))
+                       status="queued", size_bytes=len(data),
+                       scope=DOC_SCOPE_TENANT, owner_user_id=None)
         db.add(doc)
         db.commit()
         background.add_task(ingest_document, doc.id, tenant.slug, path.name, data)

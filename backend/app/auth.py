@@ -10,14 +10,18 @@ of two doors:
     machine integrations. Treated as tenant_admin for content operations but
     cannot manage users.
 
-Route guards compose from these dependencies:
+Route guards are built from the capability model in ``app.rbac``:
 
-    require_member        any authenticated tenant principal
-    require_tenant_admin  tenant_admin (or service key)
-    require_superadmin    platform operator only (humans, never API keys)
+    require(Permission.X, ...)   FastAPI dependency; 403 unless the principal's
+                                 role holds every listed permission. Returns the
+                                 Principal. ``tenant_required=True`` (default)
+                                 also 400s when there is no workspace context.
+    tenant_ctx(Permission.X)     Same check, but the dependency resolves to the
+                                 Tenant directly (handy for existing route
+                                 bodies that expect ``tenant=Depends(...)``).
 
-`get_tenant` keeps its original name so existing routers keep working — it now
-returns the tenant of whichever principal authenticated.
+The older names (``require_member``, ``require_tenant_admin``, ``get_tenant`` …)
+are kept as thin aliases so existing routers keep working.
 """
 from __future__ import annotations
 
@@ -26,11 +30,11 @@ from dataclasses import dataclass
 from fastapi import Depends, Header, HTTPException
 
 from .config import get_settings
-from .database import (ROLE_MEMBER, ROLE_RANK, ROLE_SUPERADMIN,
-                       ROLE_TENANT_ADMIN, SessionLocal, Tenant, User)
+from .database import (ROLE_SERVICE, ROLE_SUPERADMIN, SessionLocal, Tenant,
+                       User)
+from .rbac import (Permission, WORKSPACE_PERMISSIONS, has_permission,
+                   missing_permissions)
 from .security import decode_access_token
-
-ROLE_SERVICE = "service"          # API-key principal; tenant_admin-equivalent for content
 
 
 def get_db():
@@ -51,11 +55,12 @@ class Principal:
     def email(self) -> str:
         return self.user.email if self.user else "api-key"
 
-    def content_rank(self) -> int:
-        """Rank used for tenant-content authorisation."""
-        if self.role == ROLE_SERVICE:
-            return ROLE_RANK[ROLE_TENANT_ADMIN]
-        return ROLE_RANK.get(self.role, 0)
+    @property
+    def user_id(self) -> int | None:
+        return self.user.id if self.user else None
+
+    def can(self, permission: str) -> bool:
+        return has_permission(self.role, permission)
 
 
 def get_principal(authorization: str = Header(default=""),
@@ -75,7 +80,9 @@ def get_principal(authorization: str = Header(default=""),
         tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
         if user.role != ROLE_SUPERADMIN and not tenant:
             raise HTTPException(401, "Account is not attached to a workspace")
-        return Principal(role=user.role, user=user, tenant=tenant)
+        principal = Principal(role=user.role, user=user, tenant=tenant)
+        _bind_observability(principal)
+        return principal
 
     # Door 2: tenant service key. X-API-Key is canonical; X-Tenant-Key is
     # accepted for backwards-compatible demo scripts and earlier README examples.
@@ -84,28 +91,73 @@ def get_principal(authorization: str = Header(default=""),
         tenant = db.query(Tenant).filter(Tenant.api_key == service_key).first()
         if not tenant:
             raise HTTPException(401, "Invalid API key")
-        return Principal(role=ROLE_SERVICE, tenant=tenant)
+        principal = Principal(role=ROLE_SERVICE, tenant=tenant)
+        _bind_observability(principal)
+        return principal
 
     raise HTTPException(401, "Not authenticated")
 
 
-def _require_content_role(min_role: str):
-    min_rank = ROLE_RANK[min_role]
+def _bind_observability(principal: "Principal") -> None:
+    """Attach tenant/actor to the observability context so events and spans
+    emitted by this request are correlated. Best-effort only."""
+    try:
+        from . import observability as obs
+        obs.bind(tenant=principal.tenant.slug if principal.tenant else None,
+                 actor=principal.email)
+    except Exception:
+        pass
+
+
+# ── Permission guards ───────────────────────────────────────────────
+
+def require(*permissions: str, tenant_required: bool = True):
+    """Build a dependency that enforces every listed permission.
+
+    Returns the Principal on success. ``tenant_required`` (default True) also
+    rejects principals without a workspace — every workspace permission needs
+    one, and it keeps route bodies free of ``if not principal.tenant`` checks.
+    """
+    needed = frozenset(permissions)
+    if not needed:
+        raise ValueError("require() needs at least one permission")
 
     def guard(principal: Principal = Depends(get_principal)) -> Principal:
-        if principal.role == ROLE_SUPERADMIN:
-            # Deliberate: the platform operator cannot touch tenant content.
-            raise HTTPException(
-                403, "Superadmin has no access to workspace content")
-        if principal.content_rank() < min_rank:
-            raise HTTPException(403, "Workspace admin permission required")
+        missing = missing_permissions(principal.role, needed)
+        if missing:
+            if principal.role == ROLE_SUPERADMIN and needed <= WORKSPACE_PERMISSIONS:
+                raise HTTPException(
+                    403, "Platform administrator has no access to workspace content")
+            raise HTTPException(403, f"Missing permission: {sorted(missing)[0]}")
+        if tenant_required and principal.tenant is None:
+            raise HTTPException(400, "Workspace context required")
         return principal
 
     return guard
 
 
-require_member = _require_content_role(ROLE_MEMBER)
-require_tenant_admin = _require_content_role(ROLE_TENANT_ADMIN)
+def tenant_ctx(*permissions: str):
+    """Like ``require`` but the dependency resolves to the Tenant itself."""
+    dep = require(*permissions)
+
+    def resolve(principal: Principal = Depends(dep)) -> Tenant:
+        return principal.tenant
+
+    return resolve
+
+
+# ── Backwards-compatible aliases ───────────────────────────────────
+
+def require_member(principal: Principal = Depends(get_principal)) -> Principal:
+    """Any authenticated workspace principal (member, tenant_admin or service)."""
+    if principal.role == ROLE_SUPERADMIN:
+        raise HTTPException(403, "Platform administrator has no access to workspace content")
+    if principal.tenant is None:
+        raise HTTPException(400, "Workspace context required")
+    return principal
+
+
+require_tenant_admin = require(Permission.DOC_WRITE_TENANT)
 
 
 def require_superadmin(principal: Principal = Depends(get_principal)) -> Principal:
@@ -114,14 +166,8 @@ def require_superadmin(principal: Principal = Depends(get_principal)) -> Princip
     return principal
 
 
-def require_user_manager(principal: Principal = Depends(get_principal)) -> Principal:
-    """tenant_admin (own tenant) or superadmin. API keys cannot manage users."""
-    if principal.role in (ROLE_TENANT_ADMIN, ROLE_SUPERADMIN):
-        return principal
-    raise HTTPException(403, "User management requires an admin account")
+require_user_manager = require(Permission.USER_MANAGE, tenant_required=False)
 
-
-# ── Tenant resolution for content routes ────────────────────────────
 
 def get_tenant(principal: Principal = Depends(require_member)) -> Tenant:
     """Tenant of the authenticated principal — always from the token/key."""

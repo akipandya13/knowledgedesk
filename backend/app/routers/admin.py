@@ -12,8 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func
 
-from ..auth import (get_db, get_tenant, get_tenant_admin,
-                    require_member, require_superadmin, get_principal)
+from ..auth import (Principal, get_db, require, require_superadmin, tenant_ctx)
+from ..rbac import Permission
 from ..config import get_settings
 from ..crypto import decrypt_secrets, encrypt_secrets
 from ..database import (AuditLog, Document, ModelConnector, QueryLog, Tenant,
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # ── Tenant-scoped analytics (any authenticated member) ───────────────
 
 @router.get("/stats")
-def stats(tenant=Depends(get_tenant), db=Depends(get_db)):
+def stats(tenant=Depends(tenant_ctx(Permission.INSIGHTS_READ)), db=Depends(get_db)):
     docs = db.query(Document).filter(Document.tenant_id == tenant.id)
     queries = db.query(QueryLog).filter(QueryLog.tenant_id == tenant.id)
     answered = queries.filter(QueryLog.mode != "not_found")
@@ -56,7 +56,8 @@ def stats(tenant=Depends(get_tenant), db=Depends(get_db)):
 
 
 @router.get("/queries")
-def recent_queries(limit: int = 50, tenant=Depends(get_tenant), db=Depends(get_db)):
+def recent_queries(limit: int = 50, tenant=Depends(tenant_ctx(Permission.INSIGHTS_READ)),
+                   db=Depends(get_db)):
     rows = (db.query(QueryLog).filter(QueryLog.tenant_id == tenant.id)
             .order_by(QueryLog.created_at.desc()).limit(min(limit, 200)).all())
     return [{
@@ -68,7 +69,8 @@ def recent_queries(limit: int = 50, tenant=Depends(get_tenant), db=Depends(get_d
 
 
 @router.get("/gaps")
-def knowledge_gaps(limit: int = 50, tenant=Depends(get_tenant), db=Depends(get_db)):
+def knowledge_gaps(limit: int = 50, tenant=Depends(tenant_ctx(Permission.INSIGHTS_READ)),
+                   db=Depends(get_db)):
     rows = (db.query(QueryLog)
             .filter(QueryLog.tenant_id == tenant.id, QueryLog.mode == "not_found")
             .order_by(QueryLog.created_at.desc()).limit(min(limit, 200)).all())
@@ -81,17 +83,9 @@ class TenantSettingsUpdate(BaseModel):
     settings: dict
 
 
-def _require_workspace_admin(principal) -> None:
-    from ..auth import ROLE_SERVICE
-    from ..database import ROLE_TENANT_ADMIN, ROLE_SUPERADMIN
-    if principal.role not in (ROLE_TENANT_ADMIN, ROLE_SERVICE, ROLE_SUPERADMIN):
-        raise HTTPException(403, "Workspace admin permission required")
-
-
 @router.get("/model-catalog")
-def model_catalog(principal=Depends(require_member)):
+def model_catalog(principal: Principal = Depends(require(Permission.MODEL_CONNECTOR_MANAGE))):
     """Dropdown options for tenant-admin model selection."""
-    _require_workspace_admin(principal)
     return catalog_payload()
 
 
@@ -142,8 +136,7 @@ def _tenant_selection(tenant) -> tuple[str, str]:
 
 
 @router.get("/model-connectors")
-def list_connectors(principal=Depends(require_member), db=Depends(get_db)):
-    _require_workspace_admin(principal)
+def list_connectors(principal=Depends(require(Permission.MODEL_CONNECTOR_MANAGE)), db=Depends(get_db)):
     tenant = principal.tenant
     if not tenant:
         raise HTTPException(400, "Tenant context required")
@@ -154,9 +147,8 @@ def list_connectors(principal=Depends(require_member), db=Depends(get_db)):
 
 
 @router.post("/model-connectors")
-def create_connector(req: ConnectorCreate, principal=Depends(require_member),
+def create_connector(req: ConnectorCreate, principal=Depends(require(Permission.MODEL_CONNECTOR_MANAGE)),
                      db=Depends(get_db)):
-    _require_workspace_admin(principal)
     tenant = principal.tenant
     if not tenant:
         raise HTTPException(400, "Tenant context required")
@@ -176,9 +168,8 @@ def create_connector(req: ConnectorCreate, principal=Depends(require_member),
 
 
 @router.put("/model-connectors/{cid}")
-def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require_member),
+def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(Permission.MODEL_CONNECTOR_MANAGE)),
                      db=Depends(get_db)):
-    _require_workspace_admin(principal)
     tenant = principal.tenant
     conn = db.get(ModelConnector, cid)
     if not conn or not tenant or conn.tenant_id != tenant.id:
@@ -221,8 +212,7 @@ def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require_m
 
 
 @router.delete("/model-connectors/{cid}")
-def delete_connector(cid: int, principal=Depends(require_member), db=Depends(get_db)):
-    _require_workspace_admin(principal)
+def delete_connector(cid: int, principal=Depends(require(Permission.MODEL_CONNECTOR_MANAGE)), db=Depends(get_db)):
     tenant = principal.tenant
     conn = db.get(ModelConnector, cid)
     if not conn or not tenant or conn.tenant_id != tenant.id:
@@ -239,8 +229,7 @@ def delete_connector(cid: int, principal=Depends(require_member), db=Depends(get
 
 
 @router.post("/model-connectors/{cid}/test")
-async def test_connector(cid: int, principal=Depends(require_member), db=Depends(get_db)):
-    _require_workspace_admin(principal)
+async def test_connector(cid: int, principal=Depends(require(Permission.MODEL_CONNECTOR_MANAGE)), db=Depends(get_db)):
     tenant = principal.tenant
     conn = db.get(ModelConnector, cid)
     if not conn or not tenant or conn.tenant_id != tenant.id:
@@ -264,16 +253,10 @@ async def test_connector(cid: int, principal=Depends(require_member), db=Depends
 
 @router.put("/settings")
 def update_tenant_settings(req: TenantSettingsUpdate,
-                            principal=Depends(require_member),
+                            principal: Principal = Depends(require(Permission.SETTINGS_WRITE)),
                             db=Depends(get_db)):
-    """Tenant_admin or service key can change per-tenant RAG/model settings."""
-    from ..auth import ROLE_SERVICE
-    from ..database import ROLE_TENANT_ADMIN, ROLE_SUPERADMIN
-    if principal.role not in (ROLE_TENANT_ADMIN, ROLE_SERVICE, ROLE_SUPERADMIN):
-        raise HTTPException(403, "Workspace admin permission required")
+    """Workspace admin or service key can change per-tenant RAG/model settings."""
     tenant = principal.tenant
-    if not tenant:
-        raise HTTPException(400, "Tenant context required")
 
     bad = set(req.settings) - MODEL_SETTING_KEYS
     if bad:
@@ -344,7 +327,7 @@ def update_tenant_settings(req: TenantSettingsUpdate,
 
 
 @router.get("/config")
-def effective_config(tenant=Depends(get_tenant), db=Depends(get_db)):
+def effective_config(tenant=Depends(tenant_ctx(Permission.SETTINGS_READ)), db=Depends(get_db)):
     s = get_settings()
     cfg = resolve_model_config(tenant, db)
     ready_docs = db.query(Document).filter(Document.tenant_id == tenant.id,
@@ -383,7 +366,7 @@ def effective_config(tenant=Depends(get_tenant), db=Depends(get_db)):
 
 
 @router.get("/readiness")
-def enterprise_readiness(tenant=Depends(get_tenant), db=Depends(get_db)):
+def enterprise_readiness(tenant=Depends(tenant_ctx(Permission.SETTINGS_READ)), db=Depends(get_db)):
     """Board/demo-friendly view of whether a tenant is ready for rollout."""
     docs = db.query(Document).filter(Document.tenant_id == tenant.id)
     queries = db.query(QueryLog).filter(QueryLog.tenant_id == tenant.id)
@@ -410,11 +393,9 @@ def enterprise_readiness(tenant=Depends(get_tenant), db=Depends(get_db)):
 # ── Audit log (tenant-scoped) ────────────────────────────────────────
 
 @router.get("/audit")
-def tenant_audit(limit: int = 100, principal=Depends(require_member), db=Depends(get_db)):
-    from ..database import ROLE_TENANT_ADMIN
-    from ..auth import ROLE_SERVICE
-    if principal.role not in (ROLE_TENANT_ADMIN, ROLE_SERVICE):
-        raise HTTPException(403, "Workspace admin required")
+def tenant_audit(limit: int = 100,
+                 principal: Principal = Depends(require(Permission.AUDIT_READ)),
+                 db=Depends(get_db)):
     rows = (db.query(AuditLog)
             .filter(AuditLog.tenant_id == principal.tenant.id)
             .order_by(AuditLog.created_at.desc())

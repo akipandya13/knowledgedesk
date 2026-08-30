@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
-import type { Role } from "@/lib/types";
+import type { CurrentUser, Permission } from "@/lib/types";
+import { can } from "@/lib/auth/permissions";
 import {
   IconAsk,
   IconAudit,
@@ -25,62 +26,61 @@ interface NavItem {
   href: string;
   label: string;
   icon: Icon;
+  perm?: Permission; // undefined → always visible
 }
 interface NavSection {
   label: string;
   items: NavItem[];
 }
 
-function sectionsFor(role: Role): NavSection[] {
-  if (role === "superadmin") {
-    return [
-      {
-        label: "Platform",
-        items: [
-          { href: "/platform/overview", label: "Overview", icon: IconInsights },
-          { href: "/platform/workspaces", label: "Workspaces", icon: IconBuilding },
-          { href: "/platform/users", label: "All users", icon: IconUsers },
-          { href: "/platform/audit", label: "Audit log", icon: IconAudit },
-        ],
-      },
-      { label: "Account", items: [{ href: "/change-password", label: "Change password", icon: IconLock }] },
-    ];
-  }
-
-  const workspace: NavSection = {
+const SECTIONS: NavSection[] = [
+  {
+    label: "Platform",
+    items: [
+      { href: "/platform/overview", label: "Overview", icon: IconInsights, perm: "platform.read" },
+      { href: "/platform/workspaces", label: "Workspaces", icon: IconBuilding, perm: "tenant.manage" },
+      { href: "/platform/users", label: "All users", icon: IconUsers, perm: "platform.read" },
+      { href: "/platform/audit", label: "Audit log", icon: IconAudit, perm: "platform.read" },
+      { href: "/observability", label: "Observability", icon: IconGauge, perm: "observability.read" },
+    ],
+  },
+  {
     label: "Workspace",
     items: [
-      { href: "/ask", label: "Ask", icon: IconAsk },
-      { href: "/history", label: "History", icon: IconHistory },
-      { href: "/documents", label: "Documents", icon: IconDocs },
-      { href: "/collections", label: "Collections", icon: IconCollections },
-      { href: "/insights", label: "Insights", icon: IconInsights },
+      { href: "/ask", label: "Ask", icon: IconAsk, perm: "query.run" },
+      { href: "/history", label: "History", icon: IconHistory, perm: "query.run" },
+      { href: "/documents", label: "Documents", icon: IconDocs, perm: "document.read" },
+      { href: "/collections", label: "Collections", icon: IconCollections, perm: "document.read" },
+      { href: "/insights", label: "Insights", icon: IconInsights, perm: "insights.read" },
     ],
-  };
-
-  const sections: NavSection[] = [workspace];
-  if (role === "tenant_admin") {
-    sections.push({
-      label: "Administration",
-      items: [
-        { href: "/users", label: "Users", icon: IconUsers },
-        { href: "/audit", label: "Audit log", icon: IconAudit },
-        { href: "/connectors", label: "Data connectors", icon: IconPlug },
-        { href: "/model-connectors", label: "Model connectors", icon: IconModel },
-        { href: "/settings", label: "Settings", icon: IconSettings },
-      ],
-    });
-  }
-  sections.push({
+  },
+  {
+    label: "Administration",
+    items: [
+      { href: "/users", label: "Users", icon: IconUsers, perm: "user.manage" },
+      { href: "/audit", label: "Audit log", icon: IconAudit, perm: "audit.read" },
+      { href: "/connectors", label: "Data connectors", icon: IconPlug, perm: "data_connector.manage" },
+      { href: "/model-connectors", label: "Model connectors", icon: IconModel, perm: "model_connector.manage" },
+      { href: "/settings", label: "Settings", icon: IconSettings, perm: "settings.write" },
+      { href: "/observability", label: "Observability", icon: IconGauge, perm: "observability.read" },
+    ],
+  },
+  {
     label: "Account",
     items: [{ href: "/change-password", label: "Change password", icon: IconLock }],
-  });
-  return sections;
+  },
+];
+
+function sectionsFor(user: CurrentUser): NavSection[] {
+  return SECTIONS.map((sec) => ({
+    ...sec,
+    items: sec.items.filter((it) => !it.perm || can(user, it.perm)),
+  })).filter((sec) => sec.items.length > 0);
 }
 
-export function Sidebar({ role, open }: { role: Role; open: boolean }) {
+export function Sidebar({ user, open }: { user: CurrentUser; open: boolean }) {
   const pathname = usePathname();
-  const sections = sectionsFor(role);
+  const sections = sectionsFor(user);
 
   return (
     <aside className={`sidebar${open ? " open" : ""}`}>

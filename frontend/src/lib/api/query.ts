@@ -1,7 +1,7 @@
 "use client";
 
 import { apiFetch } from "./client";
-import type { AnswerResult, QuerySource, StreamEvent } from "@/lib/types";
+import type { AnswerResult, QuerySource, SearchScope, StreamEvent } from "@/lib/types";
 
 export interface QueryFilters {
   doc_ids?: number[];
@@ -18,17 +18,17 @@ function cleanFilters(f?: QueryFilters): QueryFilters | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-export function ask(question: string, filters?: QueryFilters) {
+export function ask(question: string, filters?: QueryFilters, scope: SearchScope = "all") {
   return apiFetch<AnswerResult>("/query/ask", {
     method: "POST",
-    body: { question, filters: cleanFilters(filters) },
+    body: { question, filters: cleanFilters(filters), scope },
   });
 }
 
-export function search(question: string, filters?: QueryFilters) {
+export function search(question: string, filters?: QueryFilters, scope: SearchScope = "all") {
   return apiFetch<{ results: QuerySource[] }>("/query/search", {
     method: "POST",
-    body: { question, filters: cleanFilters(filters) },
+    body: { question, filters: cleanFilters(filters), scope },
   });
 }
 
@@ -48,10 +48,11 @@ export async function* streamAsk(
   question: string,
   filters?: QueryFilters,
   signal?: AbortSignal,
+  scope: SearchScope = "all",
 ): AsyncGenerator<StreamEvent> {
   const res = await apiFetch<Response>("/query/ask/stream", {
     method: "POST",
-    body: { question, filters: cleanFilters(filters) },
+    body: { question, filters: cleanFilters(filters), scope },
     raw: true,
     signal,
   });

@@ -16,8 +16,11 @@ import queue as _queue
 import threading
 from typing import Any, AsyncIterator
 
+import time
+
 import httpx
 
+from .. import observability as obs
 from ..config import get_settings
 from ..model_catalog import LARGE_OLLAMA_MODELS, SAFE_DEMO_OLLAMA_MODELS
 
@@ -69,6 +72,21 @@ _NONE_MSG = ("The tenant is configured with LLM_PROVIDER=none. Open Settings and
 async def generate(system: str, user: str, runtime: dict[str, Any] | None = None) -> str:
     c = _cfg(runtime)
     provider = c["llm_provider"]
+    t0 = time.perf_counter()
+    try:
+        out = await _generate_dispatch(provider, system, user, c)
+        obs.count("llm.calls", provider=provider, outcome="ok")
+        obs.observe("llm.response.chars", len(out or ""), provider=provider)
+        return out
+    except Exception:
+        obs.count("llm.calls", provider=provider, outcome="error")
+        raise
+    finally:
+        obs.observe("llm.generate.seconds", time.perf_counter() - t0, provider=provider,
+                    help="LLM generation latency (non-streaming)")
+
+
+async def _generate_dispatch(provider, system, user, c) -> str:
     if provider == "ollama":
         return await _ollama(system, user, c)
     if provider == "openai_compatible":

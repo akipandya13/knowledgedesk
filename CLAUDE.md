@@ -1,0 +1,252 @@
+# CLAUDE.md — working in this repo
+
+Guidance for the next Claude session. Read this before making changes.
+
+---
+
+## 1. What this is
+
+**KnowledgeDesk** — a multi-tenant internal knowledge assistant. Upload company
+documents, ask natural-language questions, get grounded answers with citations.
+
+- **backend/** — FastAPI (Python 3.12), SQLite for metadata, Qdrant for vectors,
+  pluggable LLM/embedding backends (Ollama local by default).
+- **frontend/** — Next.js 15 (App Router, React 19), standalone build, proxies
+  `/api/*` to the backend.
+- **docker-compose.yml** — `qdrant`, `ollama`, `ollama-init`, `app`, `web`.
+
+Deep reference already written — **use it, keep it current**:
+
+- [`docs/functionality/`](docs/functionality/) — one file per capability (41 +
+  index). If you add or change a feature, update the matching file.
+- [`docs/RBAC_V1.md`](docs/RBAC_V1.md) — the authorisation + document-scope model.
+- [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) — the metrics/events/traces
+  architecture and how to add a sink.
+- [`docs/`](docs/) — older `*_FIX.md` notes on specific incidents.
+
+---
+
+## 2. Architecture map
+
+```
+backend/app/
+  main.py            app wiring, startup bootstrap, /api/health, /api/demo/seed, SPA fallback
+  config.py          Settings (pydantic-settings) — every env var lives here
+  database.py        SQLAlchemy models + init_db() migrations + role/scope constants
+  rbac.py            Permission constants + ROLE_PERMISSIONS matrix (pure data)
+  auth.py            get_principal, require(), tenant_ctx(), legacy guard aliases
+  security.py        bcrypt, JWT, refresh tokens, lockout
+  crypto.py          Fernet encryption for connector secrets
+  model_catalog.py   model profiles + connector provider field specs (static)
+  tenant_settings.py effective_settings / resolve_model_config / embedding_locked
+  observability/     signal facade + pluggable sinks (metrics/events/traces)
+  routers/           thin HTTP layer — auth_routes, users, documents, query, admin, connectors, observability
+  services/          the actual work:
+    ingestion.py     validate → dedup → queue; parse → chunk → embed → upsert
+    parsers.py       per-format text extraction
+    chunking.py      sentence-aware chunking
+    embeddings.py    local + remote embedding backends, heavy-model guard
+    vectorstore.py   Qdrant: per-tenant collections, search + access filter
+    reranker.py      optional cross-encoder, best-effort
+    rag.py           retrieve → rerank → ground → answer (+ streaming), query logging
+    llm.py           ollama / openai_compatible / azure_foundry / bedrock / none
+    audit.py         audit.record()
+    connectors/      gdrive.py, sharepoint.py, base.py
+
+frontend/src/
+  lib/api/           one module per route group; client.ts adds token + refresh-on-401
+  lib/auth/          AuthProvider (context), tokenStore, permissions.ts (can())
+  lib/types.ts       response shapes mirrored from the backend
+  app/(dashboard)/   authed pages; layout.tsx is the route guard
+  components/        Sidebar, TopBar, Modal, ui.tsx primitives
+```
+
+---
+
+## 3. Running & testing
+
+### Run the stack
+
+```bash
+docker compose up -d            # first run builds; qdrant+ollama pull
+curl localhost:8000/api/health  # app/qdrant/llm status
+open http://localhost:3000      # web client
+```
+
+Default accounts: see [`DEFAULT_USERS_AND_PASSWORDS.md`](DEFAULT_USERS_AND_PASSWORDS.md).
+
+### ⚠️ Restart vs rebuild
+
+`app` and `web` have **no source bind-mount** — code is baked into the image at
+build time. After editing backend or frontend code:
+
+```bash
+docker compose up -d --build app web     # NOT `docker compose restart`
+```
+
+`docker compose restart` only re-runs the existing image and will silently ignore
+your changes. Volumes (`app_data`, `qdrant_data`) persist across rebuilds, so the
+SQLite DB and vectors survive.
+
+### Backend tests
+
+```bash
+cd backend
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest
+```
+
+`backend/tests/` runs the real FastAPI app through `TestClient` with
+`qdrant_client` stubbed and ingestion neutralised (`conftest.py`). No services
+needed.
+
+> The machine's system/anaconda Python is **broken** (`import starlette` fails
+> despite fastapi being installed). Do not try to run the app or tests against
+> it — use a fresh venv from `requirements-dev.txt`, or run inside the `app`
+> container (`docker compose exec app pytest` after adding the dev dep there).
+
+### Frontend checks
+
+```bash
+cd frontend
+npm install
+npx tsc --noEmit        # must be clean
+```
+
+There is no ESLint config committed; `next lint` will prompt interactively —
+skip it. `tsc` is the gate.
+
+---
+
+## 4. Conventions to follow
+
+### Authorization — never hand-roll it
+
+- Every protected route uses `Depends(require(Permission.X))` or
+  `Depends(tenant_ctx(Permission.X))` from `app/auth.py`. **Do not** write
+  `if principal.role == "tenant_admin"` or compare `ROLE_RANK`.
+- To add/move a capability: edit `ROLE_PERMISSIONS` in
+  [`backend/app/rbac.py`](backend/app/rbac.py) — one place — and mirror the
+  change in [`frontend/src/lib/auth/permissions.ts`](frontend/src/lib/auth/permissions.ts).
+- New frontend page? add its prefix→permission row in
+  `frontend/src/app/(dashboard)/layout.tsx` and a nav entry with a `perm` in
+  `Sidebar.tsx`.
+- `superadmin` must never gain a workspace-content permission. `service` (API
+  key) must never gain `user.manage`.
+
+### Tenant & user identity come from the token, never the request
+
+`get_principal` resolves `{role, user, tenant}` from the verified JWT or API key.
+Route bodies read `principal.tenant` / `principal.user_id`. Never accept a
+tenant id, user id, or `scope` widening from the request body/query as
+authoritative.
+
+### Document scope
+
+Two layers: `scope='tenant'` (company-wide, `owner_user_id=NULL`) and
+`scope='workspace'` (personal, owned). See [`docs/RBAC_V1.md`](docs/RBAC_V1.md).
+When touching documents or retrieval:
+
+- Dedup key is `(tenant_id, scope, owner_user_id, content_hash)`.
+- The retrieval access filter is built **server-side** in
+  `vectorstore._access_condition` from the principal — keep it that way.
+- Connector syncs and the demo seed create company-wide docs only.
+
+### Database migrations
+
+SQLite. `init_db()` in `database.py` calls `_add_column_if_missing(table, col,
+ddl)` for every column added after v1. Migrations are **additive only** — no
+drops, no type changes, no non-null-without-default. Add the column to the model
+*and* an `_add_column_if_missing` line, and give existing rows a sensible default.
+
+### Routers thin, logic in services
+
+Routers validate input, call a service, shape the response. Business logic,
+external calls, and multi-step flows live in `app/services/`.
+
+### Model configuration
+
+Never read `get_settings()` fields directly for RAG behaviour. Go through
+`tenant_settings.resolve_model_config(tenant)` (or `effective_settings`) so
+profile + per-workspace overrides + selected connector are all applied.
+Respect `embedding_locked(tenant, db)` before changing embedding config.
+
+### Secrets
+
+Connector credentials are always `crypto.encrypt_secrets(...)` on write and
+`decrypt_secrets(...)` on read. API responses expose only `secret_fields_set`
+(the field names), never values. `""` clears a field, omitted leaves it.
+
+### Audit
+
+Call `audit.record(db, action="...", actor_email=..., actor_role=...,
+tenant_id=..., detail=...)` on every security-relevant mutation (auth events,
+user/tenant lifecycle, settings, connectors, document deletion). Action names are
+dotted: `user.created`, `tenant.model_settings_changed`.
+
+### Observability
+
+Emit signals through the facade only: `from app import observability as obs`,
+then `obs.count(...)`, `obs.gauge(...)`, `obs.observe(...)` (histogram),
+`obs.event(kind, **fields)`, `with obs.span(name): ...`. Never import a
+monitoring vendor's client into app code — new backends are **sinks**
+(`app/observability/sinks/`, register in `SINK_BUILDERS`; see
+[`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)). Every call is a no-op when
+disabled and must never raise into the request path. Audit is the compliance
+record; observability events are the ops stream — they are complementary, keep
+both.
+
+### Laptop-safe mode
+
+`LAPTOP_SAFE_MODE` (default true) + the heavy-model guards in `embeddings.py` /
+`reranker.py` exist so a demo box never triggers a multi-GB download mid-query.
+If you add a model or profile, classify it in `model_catalog.py`
+(`HEAVY_LOCAL_MODELS` / `LARGE_OLLAMA_MODELS` / `SAFE_DEMO_OLLAMA_MODELS`) and
+make failures degrade gracefully (extractive answer), not 500.
+
+### Code style (match what's there)
+
+- Module docstrings explain **why**, not just what — often with a short "Design
+  notes" block. Match that density; don't add ceremony to trivial files.
+- `from __future__ import annotations` at the top of backend modules.
+- Type hints everywhere; `dataclass` for small value objects (`Principal`,
+  `Chunk`).
+- Frontend: functional components, hooks, `type` imports, no default-export
+  utils. File references in prose use `[text](path)` markdown links, not
+  backticks.
+- Keep comments at the altitude of the surrounding file.
+
+---
+
+## 5. Known gotchas
+
+- **`docker compose restart` doesn't apply code changes** — rebuild (see §3).
+- **System Python is broken** — use a venv or the container.
+- **Qdrant collection names embed the embedding model**
+  (`kd_<slug>_<provider>_<model>`); switching embeddings orphans vectors — hence
+  the embedding lock.
+- `@app.on_event("startup")` deprecation warnings in test output are
+  pre-existing; leave unless you're deliberately migrating to lifespan handlers.
+- The demo seed reads `/app/sample_docs` (compose bind-mount) — absent outside
+  Docker.
+- `backend/requirements.txt` pins heavy ML deps (torch, sentence-transformers);
+  a full `pip install` is slow. Tests only need `requirements-dev.txt`.
+
+---
+
+## 6. Definition of done for a change
+
+1. `cd frontend && npx tsc --noEmit` is clean (if frontend touched).
+2. `cd backend && .venv/bin/pytest` is green; add/extend a test for new
+   behaviour (`backend/tests/`).
+3. Permission changes mirrored in `rbac.py` **and** `permissions.ts`.
+4. Security-relevant mutations call `audit.record`; notable domain actions also
+   `obs.event(...)`.
+5. DB columns added via model + `_add_column_if_missing`, with a default for
+   existing rows.
+6. The matching [`docs/functionality/`](docs/functionality/) file is updated (and
+   [`docs/RBAC_V1.md`](docs/RBAC_V1.md) if authz/scope changed).
+7. If backend or frontend code changed and you're verifying live:
+   `docker compose up -d --build app web`.
+8. Don't commit or push unless asked; if asked, branch first (never commit to
+   `main` directly).

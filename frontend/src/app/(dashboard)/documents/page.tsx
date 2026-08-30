@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   deleteDocument,
   listDocuments,
@@ -9,7 +9,9 @@ import {
   type UploadMeta,
 } from "@/lib/api/documents";
 import { seedDemo } from "@/lib/api/health";
-import type { DocumentRow } from "@/lib/types";
+import { useAuth } from "@/lib/auth/AuthProvider";
+import { can } from "@/lib/auth/permissions";
+import type { DocumentRow, SearchScope } from "@/lib/types";
 import {
   Card,
   Empty,
@@ -26,22 +28,36 @@ import { useToast } from "@/components/Toast";
 
 const POLL_MS = 2500;
 
+const SCOPE_TABS: { value: SearchScope; label: string }[] = [
+  { value: "all", label: "Everything" },
+  { value: "workspace", label: "My workspace" },
+  { value: "company", label: "Company-wide" },
+];
+
 export default function DocumentsPage() {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = can(user, "document.write.tenant");
+
   const [docs, setDocs] = useState<DocumentRow[] | null>(null);
+  const [tab, setTab] = useState<SearchScope>("all");
   const [meta, setMeta] = useState<UploadMeta>({ confidentiality: "internal", department: "", tags: "" });
+  // Where uploads land. Members can only use their own workspace.
+  const [uploadScope, setUploadScope] = useState<"company" | "workspace">(
+    isAdmin ? "company" : "workspace",
+  );
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const zipRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
-    listDocuments()
+    listDocuments({ scope: tab })
       .then(setDocs)
       .catch((e) => {
         setDocs([]);
         toast(e.message, "error");
       });
-  }, [toast]);
+  }, [toast, tab]);
 
   useEffect(() => {
     refresh();
@@ -56,13 +72,18 @@ export default function DocumentsPage() {
     return () => clearTimeout(id);
   }, [docs, refresh]);
 
+  const effectiveMeta = useMemo<UploadMeta>(
+    () => ({ ...meta, scope: isAdmin ? uploadScope : "workspace" }),
+    [meta, isAdmin, uploadScope],
+  );
+
   async function onFiles(files: FileList | null, isZip: boolean) {
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
       const res = isZip
-        ? await uploadZip(files[0], meta)
-        : await uploadDocuments(Array.from(files), meta);
+        ? await uploadZip(files[0], effectiveMeta)
+        : await uploadDocuments(Array.from(files), effectiveMeta);
       const ok = res.accepted.length;
       const bad = res.rejected.length;
       toast(
@@ -101,15 +122,24 @@ export default function DocumentsPage() {
     }
   }
 
+  const canDelete = (d: DocumentRow) =>
+    isAdmin || (d.scope === "workspace" && d.owner_user_id === user?.id);
+
   return (
     <>
       <PageHeader
         title="Documents"
-        subtitle="Upload company documents to build the knowledge base. Files are parsed, chunked and embedded automatically."
+        subtitle={
+          isAdmin
+            ? "Company-wide documents are searchable by everyone in the workspace. Personal documents stay private to their owner."
+            : "Documents you upload here stay private to your workspace. Company-wide documents are published by an admin."
+        }
         actions={
-          <button className="btn ghost" onClick={onSeed}>
-            Load sample documents
-          </button>
+          isAdmin ? (
+            <button className="btn ghost" onClick={onSeed}>
+              Load sample documents
+            </button>
+          ) : undefined
         }
       />
 
@@ -135,13 +165,29 @@ export default function DocumentsPage() {
             </select>
           </div>
         </div>
-        <div className="form-group">
-          <label>Tags (comma-separated, optional)</label>
-          <input
-            value={meta.tags}
-            onChange={(e) => setMeta({ ...meta, tags: e.target.value })}
-            placeholder="policy, 2024, benefits"
-          />
+        <div className="two-col">
+          <div className="form-group">
+            <label>Tags (comma-separated, optional)</label>
+            <input
+              value={meta.tags}
+              onChange={(e) => setMeta({ ...meta, tags: e.target.value })}
+              placeholder="policy, 2024, benefits"
+            />
+          </div>
+          <div className="form-group">
+            <label>Visibility</label>
+            {isAdmin ? (
+              <select
+                value={uploadScope}
+                onChange={(e) => setUploadScope(e.target.value as "company" | "workspace")}
+              >
+                <option value="company">Company-wide — everyone can search it</option>
+                <option value="workspace">My workspace — private to me</option>
+              </select>
+            ) : (
+              <input value="My workspace — private to me" disabled readOnly />
+            )}
+          </div>
         </div>
         <div className="row">
           <button className="btn" disabled={uploading} onClick={() => fileRef.current?.click()}>
@@ -174,10 +220,28 @@ export default function DocumentsPage() {
         </div>
       </Card>
 
+      <div className="chips" style={{ marginBottom: 12 }}>
+        {SCOPE_TABS.map((t) => (
+          <button
+            key={t.value}
+            className={`chip${tab === t.value ? " active" : ""}`}
+            onClick={() => setTab(t.value)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {!docs ? (
         <Loading />
       ) : docs.length === 0 ? (
-        <Empty>No documents yet — upload files or load the sample set.</Empty>
+        <Empty>
+          {tab === "company"
+            ? "No company-wide documents yet."
+            : tab === "workspace"
+              ? "Nothing in your workspace yet — upload a file above."
+              : "No documents yet — upload files or load the sample set."}
+        </Empty>
       ) : (
         <>
           {docs.some((d) => d.status === "failed") && (
@@ -189,11 +253,11 @@ export default function DocumentsPage() {
             head={
               <>
                 <th>File</th>
+                <th>Visibility</th>
                 <th>Status</th>
                 <th>Pages</th>
                 <th>Chunks</th>
                 <th>Size</th>
-                <th>Embedding</th>
                 <th>Source</th>
                 <th>Added</th>
                 <th />
@@ -209,18 +273,28 @@ export default function DocumentsPage() {
                   {d.error && <div className="small" style={{ color: "var(--red)" }}>{d.error}</div>}
                 </td>
                 <td>
+                  {d.scope === "tenant" ? (
+                    <span className="badge">Company-wide</span>
+                  ) : (
+                    <span className="badge blue">
+                      {d.owner_user_id === user?.id ? "My workspace" : d.owner_email || "Workspace"}
+                    </span>
+                  )}
+                </td>
+                <td>
                   <StatusBadge value={d.status} />
                 </td>
                 <td>{d.pages || "—"}</td>
                 <td>{d.chunks || "—"}</td>
                 <td>{fmtBytes(d.size_bytes)}</td>
-                <td className="mono">{d.embedding_model || "—"}</td>
                 <td>{d.source}</td>
                 <td className="small muted">{fmtDate(d.created_at)}</td>
                 <td>
-                  <button className="btn danger sm" onClick={() => onDelete(d.id)} aria-label="Delete">
-                    <IconTrash />
-                  </button>
+                  {canDelete(d) && (
+                    <button className="btn danger sm" onClick={() => onDelete(d.id)} aria-label="Delete">
+                      <IconTrash />
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

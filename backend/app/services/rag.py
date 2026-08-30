@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from typing import AsyncIterator
 
+from .. import observability as obs
 from ..config import get_settings
 from ..database import SessionLocal, QueryLog, Tenant
 from ..tenant_settings import effective_settings, resolve_model_config, as_bool
@@ -21,32 +22,41 @@ NOT_FOUND_MESSAGE = ("I couldn't find anything in the company knowledge base tha
 MODEL_BLOCKED_PREFIX = "Model configuration needs admin attention"
 
 
-def retrieve(tenant: Tenant, question: str, filters: dict | None = None) -> list[dict]:
+def retrieve(tenant: Tenant, question: str, filters: dict | None = None,
+             access: dict | None = None) -> list[dict]:
     cfg = resolve_model_config(tenant)
     top_k = int(cfg.get("retrieval_top_k", get_settings().retrieval_top_k))
     threshold = float(cfg.get("retrieval_score_threshold", get_settings().retrieval_score_threshold))
     embedding_provider = cfg.get("embedding_provider", "local")
     embedding_model = cfg.get("embedding_model")
 
-    vector = embeddings.embed_query(question, provider=embedding_provider,
-                                    model_name=embedding_model, runtime=cfg)
-    hits = vectorstore.search(
-        tenant.slug,
-        vector,
-        top_k,
-        threshold,
-        filters=filters,
-        embedding_model=embedding_model,
-        embedding_provider=embedding_provider,
-    )
+    with obs.span("rag.embed_query", model=embedding_model), \
+            obs.timer("rag.stage.seconds", stage="embed_query"):
+        vector = embeddings.embed_query(question, provider=embedding_provider,
+                                        model_name=embedding_model, runtime=cfg)
+    with obs.span("rag.vector_search", top_k=top_k), \
+            obs.timer("rag.stage.seconds", stage="vector_search"):
+        hits = vectorstore.search(
+            tenant.slug,
+            vector,
+            top_k,
+            threshold,
+            filters=filters,
+            embedding_model=embedding_model,
+            embedding_provider=embedding_provider,
+            access=access,
+        )
+    obs.observe("rag.retrieval.hits", len(hits), stage="vector_search")
 
     if as_bool(cfg.get("reranker_enabled")) and cfg.get("reranker_model"):
-        hits = reranker.rerank(
-            question,
-            hits,
-            str(cfg.get("reranker_model") or ""),
-            int(cfg.get("rerank_top_k") or min(8, len(hits))),
-        )
+        with obs.span("rag.rerank", model=str(cfg.get("reranker_model") or "")), \
+                obs.timer("rag.stage.seconds", stage="rerank"):
+            hits = reranker.rerank(
+                question,
+                hits,
+                str(cfg.get("reranker_model") or ""),
+                int(cfg.get("rerank_top_k") or min(8, len(hits))),
+            )
 
     # Trim to the context budget.
     budget = int(cfg.get("retrieval_max_context_chars", get_settings().retrieval_max_context_chars))
@@ -127,12 +137,14 @@ def _sources(hits: list[dict]) -> list[dict]:
 
 
 def _log(tenant_id: int, question: str, answer: str, mode: str,
-         confidence: float, latency_ms: int, sources: list[dict], filters: dict | None = None) -> int:
+         confidence: float, latency_ms: int, sources: list[dict],
+         filters: dict | None = None, user_id: int | None = None) -> int:
     db = SessionLocal()
     try:
-        row = QueryLog(tenant_id=tenant_id, question=question, answer=answer,
-                       mode=mode, confidence=confidence, latency_ms=latency_ms,
-                       sources_json=sources, filters_json=filters or {})
+        row = QueryLog(tenant_id=tenant_id, user_id=user_id, question=question,
+                       answer=answer, mode=mode, confidence=confidence,
+                       latency_ms=latency_ms, sources_json=sources,
+                       filters_json=filters or {})
         db.add(row)
         db.commit()
         return row.id
@@ -140,54 +152,82 @@ def _log(tenant_id: int, question: str, answer: str, mode: str,
         db.close()
 
 
-async def answer(tenant: Tenant, question: str, filters: dict | None = None) -> dict:
+def _emit_answer(tenant: Tenant, mode: str, latency_ms: int, confidence: float,
+                 n_sources: int, streamed: bool = False) -> None:
+    """One place the answer outcome is turned into metrics + a domain event."""
+    obs.count("rag.answers", mode=mode, streamed=str(streamed).lower(),
+              help="Answers produced, by outcome mode")
+    obs.observe("rag.answer.seconds", latency_ms / 1000.0, mode=mode,
+                help="End-to-end answer latency")
+    kind = "question.not_found" if mode == "not_found" else "question.answered"
+    obs.event(kind, level="warn" if mode in ("not_found", "model_blocked") else "info",
+              mode=mode, latency_ms=latency_ms, confidence=round(float(confidence or 0), 3),
+              sources=n_sources, streamed=streamed)
+
+
+async def answer(tenant: Tenant, question: str, filters: dict | None = None,
+                 access: dict | None = None) -> dict:
     s = get_settings()
     cfg = resolve_model_config(tenant)
+    uid = (access or {}).get("user_id")
     t0 = time.time()
-    try:
-        hits = retrieve(tenant, question, filters)
-    except (embeddings.ModelLoadBlocked, embeddings.EmbeddingError) as exc:
-        text = _blocked_model_answer(exc)
-        qid = _log(tenant.id, question, text, "model_blocked", 0.0,
-                   int((time.time() - t0) * 1000), [], filters)
-        return {"query_id": qid, "answer": text, "mode": "model_blocked",
-                "confidence": 0.0, "sources": [], "model_profile": cfg.get("model_profile")}
+    with obs.span("rag.answer", tenant=tenant.slug) as _sp:
+        try:
+            hits = retrieve(tenant, question, filters, access)
+        except (embeddings.ModelLoadBlocked, embeddings.EmbeddingError) as exc:
+            text = _blocked_model_answer(exc)
+            ms = int((time.time() - t0) * 1000)
+            qid = _log(tenant.id, question, text, "model_blocked", 0.0, ms, [], filters, uid)
+            _emit_answer(tenant, "model_blocked", ms, 0.0, 0)
+            _sp.set(mode="model_blocked")
+            return {"query_id": qid, "answer": text, "mode": "model_blocked",
+                    "confidence": 0.0, "sources": [], "model_profile": cfg.get("model_profile")}
 
-    if not hits:
-        qid = _log(tenant.id, question, NOT_FOUND_MESSAGE, "not_found", 0.0,
-                   int((time.time() - t0) * 1000), [], filters)
-        return {"query_id": qid, "answer": NOT_FOUND_MESSAGE, "mode": "not_found",
-                "confidence": 0.0, "sources": []}
+        if not hits:
+            ms = int((time.time() - t0) * 1000)
+            qid = _log(tenant.id, question, NOT_FOUND_MESSAGE, "not_found", 0.0, ms, [], filters, uid)
+            _emit_answer(tenant, "not_found", ms, 0.0, 0)
+            _sp.set(mode="not_found")
+            return {"query_id": qid, "answer": NOT_FOUND_MESSAGE, "mode": "not_found",
+                    "confidence": 0.0, "sources": []}
 
-    system, user = _build_prompts(tenant, question, hits)
-    try:
-        text = await llm.generate(system, user, runtime=cfg)
-        mode = "llm"
-    except llm.LLMUnavailable as exc:
-        if not s.llm_fallback_to_extractive:
-            raise
-        text, mode = _extractive_answer(hits, str(exc)), "llm_unavailable"
+        system, user = _build_prompts(tenant, question, hits)
+        try:
+            with obs.span("rag.llm_generate", model=cfg.get("llm_model")), \
+                    obs.timer("rag.stage.seconds", stage="llm_generate"):
+                text = await llm.generate(system, user, runtime=cfg)
+            mode = "llm"
+        except llm.LLMUnavailable as exc:
+            obs.count("rag.llm.failures", provider=cfg.get("llm_provider", "?"))
+            if not s.llm_fallback_to_extractive:
+                raise
+            text, mode = _extractive_answer(hits, str(exc)), "llm_unavailable"
 
-    sources = _sources(hits)
-    confidence = hits[0].get("rerank_score") if hits[0].get("rerank_score") is not None else hits[0]["score"]
-    qid = _log(tenant.id, question, text, mode, float(confidence or 0),
-               int((time.time() - t0) * 1000), sources, filters)
-    return {"query_id": qid, "answer": text, "mode": mode,
-            "confidence": confidence, "sources": sources,
-            "model_profile": cfg.get("model_profile"), "llm_model": cfg.get("llm_model")}
+        sources = _sources(hits)
+        confidence = hits[0].get("rerank_score") if hits[0].get("rerank_score") is not None else hits[0]["score"]
+        ms = int((time.time() - t0) * 1000)
+        qid = _log(tenant.id, question, text, mode, float(confidence or 0), ms, sources, filters, uid)
+        _emit_answer(tenant, mode, ms, confidence or 0, len(sources))
+        _sp.set(mode=mode, sources=len(sources))
+        return {"query_id": qid, "answer": text, "mode": mode,
+                "confidence": confidence, "sources": sources,
+                "model_profile": cfg.get("model_profile"), "llm_model": cfg.get("llm_model")}
 
 
-async def answer_stream(tenant: Tenant, question: str, filters: dict | None = None) -> AsyncIterator[dict]:
+async def answer_stream(tenant: Tenant, question: str, filters: dict | None = None,
+                        access: dict | None = None) -> AsyncIterator[dict]:
     """Yields events: {type: meta|token|done, ...} for SSE streaming."""
     s = get_settings()
     cfg = resolve_model_config(tenant)
+    uid = (access or {}).get("user_id")
     t0 = time.time()
     try:
-        hits = retrieve(tenant, question, filters)
+        hits = retrieve(tenant, question, filters, access)
     except (embeddings.ModelLoadBlocked, embeddings.EmbeddingError) as exc:
         text = _blocked_model_answer(exc)
-        qid = _log(tenant.id, question, text, "model_blocked", 0.0,
-                   int((time.time() - t0) * 1000), [], filters)
+        ms = int((time.time() - t0) * 1000)
+        qid = _log(tenant.id, question, text, "model_blocked", 0.0, ms, [], filters, uid)
+        _emit_answer(tenant, "model_blocked", ms, 0.0, 0, streamed=True)
         yield {"type": "meta", "mode": "model_blocked", "sources": [], "confidence": 0.0,
                "model_profile": cfg.get("model_profile")}
         yield {"type": "token", "text": text}
@@ -195,8 +235,9 @@ async def answer_stream(tenant: Tenant, question: str, filters: dict | None = No
         return
 
     if not hits:
-        qid = _log(tenant.id, question, NOT_FOUND_MESSAGE, "not_found", 0.0,
-                   int((time.time() - t0) * 1000), [], filters)
+        ms = int((time.time() - t0) * 1000)
+        qid = _log(tenant.id, question, NOT_FOUND_MESSAGE, "not_found", 0.0, ms, [], filters, uid)
+        _emit_answer(tenant, "not_found", ms, 0.0, 0, streamed=True)
         yield {"type": "meta", "mode": "not_found", "sources": [], "confidence": 0.0}
         yield {"type": "token", "text": NOT_FOUND_MESSAGE}
         yield {"type": "done", "query_id": qid}
@@ -216,7 +257,9 @@ async def answer_stream(tenant: Tenant, question: str, filters: dict | None = No
             collected.append(tok)
             yield {"type": "token", "text": tok}
     except llm.LLMUnavailable as exc:
+        obs.count("rag.llm.failures", provider=cfg.get("llm_provider", "?"))
         if not s.llm_fallback_to_extractive:
+            _emit_answer(tenant, "error", int((time.time() - t0) * 1000), 0.0, len(sources), streamed=True)
             yield {"type": "error", "message": f"LLM unavailable: {exc}"}
             return
         mode = "llm_unavailable"
@@ -226,6 +269,7 @@ async def answer_stream(tenant: Tenant, question: str, filters: dict | None = No
         yield {"type": "token", "text": text}
 
     full = "".join(collected)
-    qid = _log(tenant.id, question, full, mode, float(confidence or 0),
-               int((time.time() - t0) * 1000), sources, filters)
+    ms = int((time.time() - t0) * 1000)
+    qid = _log(tenant.id, question, full, mode, float(confidence or 0), ms, sources, filters, uid)
+    _emit_answer(tenant, mode, ms, confidence or 0, len(sources), streamed=True)
     yield {"type": "done", "query_id": qid}

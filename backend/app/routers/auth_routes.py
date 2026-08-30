@@ -6,6 +6,7 @@ import datetime as dt
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from .. import observability as obs
 from .. import security
 from ..auth import Principal, get_db, get_principal
 from ..config import get_settings
@@ -70,6 +71,8 @@ def login(req: LoginRequest, db=Depends(get_db)):
     if not user or not user.is_active:
         audit.record(db, action="auth.login.failed", actor_email=email,
                      detail="unknown or disabled account")
+        obs.count("auth.logins", outcome="failed", reason="unknown_or_disabled")
+        obs.event("auth.login.failed", level="warn", email=email, reason="unknown_or_disabled")
         raise HTTPException(401, GENERIC_LOGIN_ERROR)
 
     remaining = security.lockout_remaining_minutes(user.locked_until)
@@ -87,6 +90,9 @@ def login(req: LoginRequest, db=Depends(get_db)):
         db.commit()
         audit.record(db, action="auth.login.failed", actor_email=email,
                      tenant_id=user.tenant_id, detail="wrong password")
+        obs.count("auth.logins", outcome="failed", reason="bad_password")
+        obs.event("auth.login.failed", level="warn", email=email, reason="bad_password",
+                  locked=bool(user.locked_until))
         raise HTTPException(401, GENERIC_LOGIN_ERROR)
 
     user.failed_logins = 0
@@ -95,6 +101,9 @@ def login(req: LoginRequest, db=Depends(get_db)):
     db.commit()
     audit.record(db, action="auth.login", actor_email=user.email,
                  actor_role=user.role, tenant_id=user.tenant_id)
+    obs.count("auth.logins", outcome="success", role=user.role)
+    obs.event("auth.login", actor=user.email,
+              tenant=(user.tenant.slug if user.tenant else None), role=user.role)
     return _token_pair(db, user)
 
 
@@ -113,6 +122,8 @@ def refresh(req: RefreshRequest, db=Depends(get_db)):
         db.commit()
         audit.record(db, action="auth.refresh.reuse_detected",
                      detail=f"user_id={row.user_id} — all sessions revoked")
+        obs.count("auth.refresh.reuse_detected")
+        obs.event("auth.refresh.reuse_detected", level="error", user_id=row.user_id)
         raise HTTPException(401, "Session revoked — please sign in again")
 
     expires = row.expires_at

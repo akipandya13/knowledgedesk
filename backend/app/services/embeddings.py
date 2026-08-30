@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from typing import Any, List
 
 import httpx
 
+from .. import observability as obs
 from ..config import get_settings
 from ..model_catalog import model_warning
 
@@ -85,6 +87,21 @@ def embed_texts(texts: List[str], provider: str | None = None,
     runtime = runtime or {}
     provider = provider or s.embedding_provider
     model_name = model_name or s.embedding_model
+    t0 = time.perf_counter()
+    try:
+        vecs = _embed_dispatch(texts, provider, model_name, batch_size, runtime, s)
+        obs.count("embedding.calls", provider=provider, outcome="ok")
+        return vecs
+    except Exception:
+        obs.count("embedding.calls", provider=provider, outcome="error")
+        raise
+    finally:
+        obs.observe("embedding.batch.seconds", time.perf_counter() - t0, provider=provider,
+                    help="Embedding batch latency")
+        obs.observe("embedding.batch.texts", len(texts), provider=provider)
+
+
+def _embed_dispatch(texts, provider, model_name, batch_size, runtime, s):
     if provider in ("local", ""):
         model = _local_model(model_name)
         vectors = model.encode(

@@ -13,11 +13,12 @@ import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..auth import ROLE_SERVICE, get_db, require_member
+from .. import observability as obs
+from ..auth import get_db, require
 from ..crypto import decrypt_secrets, encrypt_secrets
-from ..database import (ROLE_SUPERADMIN, ROLE_TENANT_ADMIN, ConnectorSyncRun,
-                        DataConnector, SessionLocal, Tenant, utcnow)
+from ..database import ConnectorSyncRun, DataConnector, SessionLocal, Tenant, utcnow
 from ..model_catalog import DATA_CONNECTOR_PROVIDERS
+from ..rbac import Permission
 from ..services import audit
 from ..services.connectors import PROVIDERS
 from ..services.connectors.base import ConnectorConfigError
@@ -27,11 +28,6 @@ log = logging.getLogger("knowledgedesk.connectors")
 router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 
 STALE_RUN_MINUTES = 30
-
-
-def _require_workspace_admin(principal) -> None:
-    if principal.role not in (ROLE_TENANT_ADMIN, ROLE_SERVICE, ROLE_SUPERADMIN):
-        raise HTTPException(403, "Workspace admin permission required")
 
 
 def _tenant_or_400(principal) -> Tenant:
@@ -104,13 +100,12 @@ class ConnectorUpdate(BaseModel):
 # ── Provider catalog + legacy status ─────────────────────────────
 
 @router.get("/providers")
-def connector_providers(principal=Depends(require_member)):
-    _require_workspace_admin(principal)
+def connector_providers(principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE))):
     return DATA_CONNECTOR_PROVIDERS
 
 
 @router.get("/status")
-def status(principal=Depends(require_member)):
+def status(principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE))):
     """Legacy .env global connectors (deprecated — use per-workspace below)."""
     from ..services.connectors import gdrive, sharepoint
     return {
@@ -123,8 +118,7 @@ def status(principal=Depends(require_member)):
 # ── CRUD ──────────────────────────────────────────────────────────
 
 @router.get("")
-def list_connectors(principal=Depends(require_member), db=Depends(get_db)):
-    _require_workspace_admin(principal)
+def list_connectors(principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)), db=Depends(get_db)):
     tenant = _tenant_or_400(principal)
     rows = (db.query(DataConnector)
             .filter(DataConnector.tenant_id == tenant.id)
@@ -133,9 +127,8 @@ def list_connectors(principal=Depends(require_member), db=Depends(get_db)):
 
 
 @router.post("")
-def create_connector(req: ConnectorCreate, principal=Depends(require_member),
+def create_connector(req: ConnectorCreate, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)),
                      db=Depends(get_db)):
-    _require_workspace_admin(principal)
     tenant = _tenant_or_400(principal)
     clean_secrets = {k: v for k, v in (req.secrets or {}).items() if v}
     _validate_fields(req.provider, req.config or {}, set(clean_secrets))
@@ -153,9 +146,8 @@ def create_connector(req: ConnectorCreate, principal=Depends(require_member),
 
 
 @router.put("/{cid}")
-def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require_member),
+def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)),
                      db=Depends(get_db)):
-    _require_workspace_admin(principal)
     conn = _get_owned(db, principal, cid)
 
     if req.name is not None:
@@ -181,8 +173,7 @@ def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require_m
 
 
 @router.delete("/{cid}")
-def delete_connector(cid: int, principal=Depends(require_member), db=Depends(get_db)):
-    _require_workspace_admin(principal)
+def delete_connector(cid: int, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)), db=Depends(get_db)):
     conn = _get_owned(db, principal, cid)
     db.query(ConnectorSyncRun).filter(ConnectorSyncRun.connector_id == cid).delete()
     db.delete(conn)
@@ -195,8 +186,7 @@ def delete_connector(cid: int, principal=Depends(require_member), db=Depends(get
 # ── Test ─────────────────────────────────────────────────────────
 
 @router.post("/{cid}/test")
-def test_connector(cid: int, principal=Depends(require_member), db=Depends(get_db)):
-    _require_workspace_admin(principal)
+def test_connector(cid: int, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)), db=Depends(get_db)):
     conn = _get_owned(db, principal, cid)
     provider = PROVIDERS.get(conn.provider)
     if not provider:
@@ -217,9 +207,8 @@ def test_connector(cid: int, principal=Depends(require_member), db=Depends(get_d
 # ── Sync ─────────────────────────────────────────────────────────
 
 @router.post("/{cid}/sync")
-def start_sync(cid: int, background: BackgroundTasks, principal=Depends(require_member),
+def start_sync(cid: int, background: BackgroundTasks, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)),
                db=Depends(get_db)):
-    _require_workspace_admin(principal)
     conn = _get_owned(db, principal, cid)
     if not conn.is_active:
         raise HTTPException(400, "Connector is disabled")
@@ -254,9 +243,8 @@ def start_sync(cid: int, background: BackgroundTasks, principal=Depends(require_
 
 
 @router.get("/{cid}/runs")
-def list_runs(cid: int, limit: int = 20, principal=Depends(require_member),
+def list_runs(cid: int, limit: int = 20, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)),
               db=Depends(get_db)):
-    _require_workspace_admin(principal)
     _get_owned(db, principal, cid)
     rows = (db.query(ConnectorSyncRun)
             .filter(ConnectorSyncRun.connector_id == cid)
@@ -320,12 +308,20 @@ def _run_sync(connector_id: int, tenant_slug: str, run_id: int) -> None:
         db.merge(conn)
         db.commit()
 
+        obs.count("connector.syncs", provider=conn.provider, status=status,
+                  help="Connector sync runs, by outcome")
+        obs.event("connector.sync.completed", tenant=tenant_slug, provider=conn.provider,
+                  status=status, queued=queued, skipped=skipped, failed=failed)
+
         for doc_id, fname, data in pending:
             try:
                 ingest_document(doc_id, tenant_slug, fname, data)
             except Exception:  # noqa: BLE001 — per-doc failure is recorded on the Document row
                 log.exception("connector ingest failed for doc %s", doc_id)
     except Exception as e:  # noqa: BLE001
+        obs.count("connector.syncs", provider="?", status="error")
+        obs.event("connector.sync.completed", tenant=tenant_slug, status="error",
+                  level="error", error=str(e)[:300])
         log.exception("connector sync failed (connector=%s run=%s)", connector_id, run_id)
         run = db.get(ConnectorSyncRun, run_id)
         conn = db.get(DataConnector, connector_id)

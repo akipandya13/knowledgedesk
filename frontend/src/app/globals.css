@@ -665,6 +665,11 @@ tr:last-child td {
 .chip:hover {
   border-color: var(--ink);
 }
+.chip.active {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--surface);
+}
 
 /* ── Toast ────────────────────────────────────────────────────── */
 .toast-host {

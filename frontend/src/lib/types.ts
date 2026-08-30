@@ -2,6 +2,29 @@
 
 export type Role = "member" | "tenant_admin" | "superadmin" | "service";
 
+/** Capability strings — mirror of backend/app/rbac.py (Permission). */
+export type Permission =
+  | "query.run"
+  | "feedback.write"
+  | "document.read"
+  | "document.write.workspace"
+  | "document.write.tenant"
+  | "insights.read"
+  | "settings.read"
+  | "settings.write"
+  | "model_connector.manage"
+  | "data_connector.manage"
+  | "audit.read"
+  | "observability.read"
+  | "user.manage"
+  | "tenant.manage"
+  | "platform.read";
+
+/** How a document is stored. */
+export type DocScope = "tenant" | "workspace";
+/** Where an Ask/Search request should look. */
+export type SearchScope = "workspace" | "company" | "all";
+
 export interface TenantRef {
   slug: string;
   name: string;
@@ -51,6 +74,9 @@ export interface DocumentRow {
   embedding_model: string;
   version: number;
   is_active: boolean;
+  scope: DocScope;
+  owner_user_id: number | null;
+  owner_email: string | null;
   created_at: string | null;
 }
 
@@ -292,4 +318,62 @@ export interface ConnectorSyncRun {
   detail: string;
   started_at: string | null;
   finished_at: string | null;
+}
+
+// ── Observability ────────────────────────────────────────────────
+
+export interface ObsConfig {
+  enabled: boolean;
+  service: string;
+  sinks: string[];
+  trace_sample_rate: number;
+  queue_dropped: number;
+}
+
+export interface MetricSeries {
+  labels: Record<string, string>;
+  value?: number;
+  count?: number;
+  sum?: number;
+  buckets?: Record<string, number>;
+}
+
+export interface Metric {
+  name: string;
+  type: "counter" | "gauge" | "histogram";
+  help: string;
+  series: MetricSeries[];
+}
+
+export interface MetricsSnapshot {
+  service: string;
+  generated_at: number;
+  uptime_seconds: number;
+  series_dropped: number;
+  sinks: string[];
+  metrics: Metric[];
+}
+
+export interface ObsEvent {
+  ts: number;
+  kind: string;
+  level: "info" | "warn" | "error";
+  tenant: string | null;
+  actor: string | null;
+  route: string | null;
+  request_id: string | null;
+  trace_id: string | null;
+  fields: Record<string, unknown>;
+}
+
+export interface ObsSpan {
+  ts: number;
+  name: string;
+  span_id: string;
+  parent_id: string | null;
+  trace_id: string | null;
+  tenant: string | null;
+  status: "ok" | "error";
+  duration_ms: number | null;
+  attributes: Record<string, unknown>;
 }

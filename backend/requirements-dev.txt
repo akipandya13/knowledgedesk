@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Test suite (backend/tests). Runs the FastAPI app through TestClient with the
+# vector store stubbed — see tests/conftest.py.
+pytest==8.3.4
