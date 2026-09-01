@@ -65,7 +65,7 @@ function LoginForm() {
     setBusy(true);
     setError("");
     try {
-      const res = await signIn(email.trim().toLowerCase(), password);
+      const res = await signIn(email.trim().toLowerCase(), password.trim());
       if (res.kind === "mfa") setMfaToken(res.mfaToken);
       else finish(res.user);
     } catch (err) {

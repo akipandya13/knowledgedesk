@@ -9,7 +9,7 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import authn
 from .. import observability as obs
@@ -29,14 +29,25 @@ GENERIC_LOGIN_ERROR = "Incorrect email or password"
 
 # ── request models ────────────────────────────────────────────────
 
+def _trim(v):
+    """Strip surrounding whitespace from a submitted secret. Copy-pasting a
+    credential (e.g. from DEFAULT_USERS_AND_PASSWORDS.md) very often picks up a
+    trailing space or newline; without this that becomes a baffling
+    "Incorrect email or password". A password of only whitespace is not a thing
+    we need to support."""
+    return v.strip() if isinstance(v, str) else v
+
+
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=200)
+    _p = field_validator("password")(_trim)
 
 
 class MfaLoginRequest(BaseModel):
     mfa_token: str
     code: str = Field(min_length=4, max_length=32)
+    _c = field_validator("code")(_trim)
 
 
 class RefreshRequest(BaseModel):
@@ -46,6 +57,7 @@ class RefreshRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str = Field(max_length=200)
+    _cp = field_validator("current_password", "new_password")(_trim)
 
 
 class ForgotRequest(BaseModel):
@@ -55,6 +67,7 @@ class ForgotRequest(BaseModel):
 class ResetRequest(BaseModel):
     token: str
     new_password: str = Field(max_length=200)
+    _np = field_validator("new_password")(_trim)
 
 
 class TokenOnly(BaseModel):
@@ -68,6 +81,7 @@ class MfaEnableRequest(BaseModel):
 class MfaDisableRequest(BaseModel):
     password: str | None = None
     code: str | None = None
+    _pw = field_validator("password", "code")(_trim)
 
 
 # ── helpers ───────────────────────────────────────────────────────

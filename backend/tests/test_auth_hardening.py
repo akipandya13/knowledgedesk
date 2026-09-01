@@ -117,6 +117,19 @@ def test_login_rate_limited(client):
     assert codes.index(429) >= 5
 
 
+def test_login_tolerates_pasted_whitespace_around_the_password(client, make_world):
+    """Copy-pasting a credential picks up a trailing space/newline; that must
+    not become "Incorrect email or password" (regression)."""
+    w = make_world()
+    email = f"alice@{w['slug']}.test"
+    for pw in (f"  {PW}", f"{PW}\n", f"\t{PW} "):
+        r = _login(client, email, pw)
+        assert r.status_code == 200, f"{pw!r} -> {r.status_code} {r.text}"
+        assert "access_token" in r.json()
+    # a genuinely wrong password still fails
+    assert _login(client, email, "Passw0rd!124").status_code == 401
+
+
 # ── password reset + history ────────────────────────────────────
 
 def test_forgot_and_reset_password(client, make_world, monkeypatch):
