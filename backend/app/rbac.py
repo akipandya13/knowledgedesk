@@ -46,6 +46,7 @@ class Permission:
     MODEL_CONNECTOR_MANAGE = "model_connector.manage"
     DATA_CONNECTOR_MANAGE = "data_connector.manage"
     AUDIT_READ = "audit.read"
+    ACTIVITY_READ = "activity.read"             # user-activity explorer (behavioural stream)
     OBSERVABILITY_READ = "observability.read"   # metrics / events / traces
     ACCESS_MANAGE = "access.manage"             # custom roles, groups, grants, clearance
     USER_MANAGE = "user.manage"
@@ -68,7 +69,7 @@ WORKSPACE_PERMISSIONS: frozenset[str] = frozenset({
     Permission.DOC_DELETE,
     Permission.INSIGHTS_READ, Permission.SETTINGS_READ, Permission.SETTINGS_WRITE,
     Permission.MODEL_CONNECTOR_MANAGE, Permission.DATA_CONNECTOR_MANAGE,
-    Permission.AUDIT_READ, Permission.ACCESS_MANAGE,
+    Permission.AUDIT_READ, Permission.ACTIVITY_READ, Permission.ACCESS_MANAGE,
 })
 
 # Permissions that make sense as a per-object grant (app.authz.can_on).
@@ -96,6 +97,7 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     Permission.MODEL_CONNECTOR_MANAGE: "Manage LLM / embedding connectors",
     Permission.DATA_CONNECTOR_MANAGE: "Manage Drive / SharePoint connectors",
     Permission.AUDIT_READ: "Read the workspace audit log",
+    Permission.ACTIVITY_READ: "Read the user-activity log (who viewed / ran / exported what)",
     Permission.OBSERVABILITY_READ: "Read metrics, events and traces",
     Permission.ACCESS_MANAGE: "Manage custom roles, groups, grants and clearance",
     Permission.USER_MANAGE: "Create and manage users",
@@ -122,6 +124,7 @@ _TENANT_ADMIN: set[str] = _MEMBER | {
     Permission.MODEL_CONNECTOR_MANAGE,
     Permission.DATA_CONNECTOR_MANAGE,
     Permission.AUDIT_READ,
+    Permission.ACTIVITY_READ,
     Permission.OBSERVABILITY_READ,
     Permission.ACCESS_MANAGE,
     Permission.USER_MANAGE,

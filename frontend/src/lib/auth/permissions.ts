@@ -20,6 +20,7 @@ const TENANT_ADMIN: Permission[] = [
   "model_connector.manage",
   "data_connector.manage",
   "audit.read",
+  "activity.read",
   "observability.read",
   "access.manage",
   "user.manage",

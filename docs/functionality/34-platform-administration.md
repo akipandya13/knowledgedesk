@@ -10,10 +10,16 @@ platform-wide user view, platform audit, and platform stats. It deliberately has
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/admin/tenants` | create a workspace (returns its API key) |
-| GET | `/api/admin/tenants` | list workspaces with user/doc counts + keys |
-| DELETE | `/api/admin/tenants/{slug}` | delete a workspace, its vectors, users, query log |
+| POST | `/api/admin/tenants` | create a workspace (+ optional first admin, entitlements) → API key |
+| GET | `/api/admin/tenants` | list workspaces with status + user/doc counts + keys |
+| GET | `/api/admin/tenants/{slug}` | one workspace: status, counts, entitlements, overrides |
+| PATCH | `/api/admin/tenants/{slug}` | rename / set entitlements (audited with a diff) |
+| POST | `/api/admin/tenants/{slug}/suspend` | lock the workspace (`{reason?}`) + revoke live sessions |
+| POST | `/api/admin/tenants/{slug}/reactivate` | restore access |
+| DELETE | `/api/admin/tenants/{slug}` | delete a workspace + **every** tenant-scoped table + vectors |
 | GET | `/api/admin/platform/audit?limit=` | audit across all workspaces + platform events |
+| GET | `/api/admin/platform/activity?limit=` | activity across all workspaces |
+| GET | `/api/admin/platform/audit/verify` | verify one or every workspace's hash chain |
 | GET | `/api/admin/platform/stats` | tenant / user / document / query totals |
 | GET/POST/PATCH | `/api/users` (with `tenant_slug`) | manage users in any workspace + other superadmins |
 

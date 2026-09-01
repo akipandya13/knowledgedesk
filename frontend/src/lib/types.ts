@@ -16,6 +16,7 @@ export type Permission =
   | "model_connector.manage"
   | "data_connector.manage"
   | "audit.read"
+  | "activity.read"
   | "observability.read"
   | "access.manage"
   | "user.manage"
@@ -189,12 +190,72 @@ export interface KnowledgeGap {
 
 export interface AuditEntry {
   id: number;
+  seq?: number;
   actor: string;
+  actor_user_id?: number | null;
+  actor_role?: string;
   role?: string;
   action: string;
+  target_type?: string | null;
+  target_id?: string | null;
   detail: string;
+  meta?: Record<string, unknown>;
+  changes?: Record<string, [unknown, unknown]> | null;
+  ip?: string | null;
+  request_id?: string | null;
+  entry_hash?: string | null;
   tenant_id?: number | null;
   created_at: string | null;
+}
+
+export interface ActivityEntry {
+  id: number;
+  tenant_id?: number | null;
+  user_id: number | null;
+  actor: string;
+  actor_role?: string;
+  action: string;
+  category: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  method: string | null;
+  route: string | null;
+  status: number | null;
+  ip: string | null;
+  request_id?: string | null;
+  meta?: Record<string, unknown>;
+  created_at: string | null;
+}
+
+export interface AuditChainSummary {
+  chain_key: number;
+  entries: number;
+  ok: boolean;
+  truncated: boolean;
+}
+
+export interface AuditVerifyResult {
+  ok: boolean;
+  checked: number;
+  unchained: number;
+  truncated: boolean;
+  chains: AuditChainSummary[];
+  first_broken: { id: number; seq: number; tenant_id: number | null; reason: string } | null;
+}
+
+export interface AuditFilter {
+  prefix?: string;
+  actor?: string;
+  target_type?: string;
+  since?: string;
+  until?: string;
+  before_id?: number;
+  limit?: number;
+}
+
+export interface ActivityFilter extends AuditFilter {
+  user_id?: number;
+  category?: string;
 }
 
 export interface UserRow {
@@ -263,14 +324,41 @@ export interface MyAccess {
   confidentiality_enforced: boolean;
 }
 
+export type TenantStatus = "active" | "suspended";
+
 export interface TenantRow {
   id: number;
   slug: string;
   name: string;
   api_key: string;
+  status: TenantStatus;
+  suspended_reason?: string | null;
   users: number;
   documents: number;
   created_at: string | null;
+}
+
+export interface TenantDetail {
+  id: number;
+  slug: string;
+  name: string;
+  status: TenantStatus;
+  suspended_at: string | null;
+  suspended_reason: string | null;
+  api_key: string;
+  created_at: string | null;
+  counts: Record<string, number>;
+  entitlements: Record<string, boolean>;
+  settings_overrides: Record<string, unknown>;
+}
+
+export interface TenantCreateResult {
+  id: number;
+  slug: string;
+  name: string;
+  api_key: string;
+  status: TenantStatus;
+  admin: { email: string; temporary_password: string; note: string } | null;
 }
 
 // ── Model catalog + connectors ────────────────────────────────────

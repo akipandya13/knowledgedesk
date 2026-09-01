@@ -19,10 +19,12 @@ from .config import get_settings
 from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
                        init_db)
 from .observability.middleware import ObservabilityMiddleware
+from .activity_middleware import ActivityMiddleware
+from .request_context import RequestContextMiddleware
 from .rbac import Permission
 from .secret_resolver import available_providers, resolve_secret
 from .routers import access, admin, connectors, documents, query, sso
-from .routers import auth_routes, observability as observability_router, users as users_router
+from .routers import auth_routes, me as me_router, observability as observability_router, users as users_router
 from .services import llm, vectorstore
 from .services.ingestion import ingest_document
 from . import security
@@ -44,6 +46,10 @@ app.add_middleware(CORSMiddleware, allow_origins=_cors or ["*"], allow_methods=[
 # Observability is initialised before the middleware records anything.
 obs.setup(settings)
 app.add_middleware(ObservabilityMiddleware)
+# Governance: capture request metadata (IP / UA / request id) for the audit &
+# activity logs, then record one activity row per authenticated API call.
+app.add_middleware(RequestContextMiddleware)
+app.add_middleware(ActivityMiddleware)
 
 # ── Edge hardening (added last → evaluated first) ───────────────────
 _hosts = [h.strip() for h in (settings.trusted_hosts or "*").split(",") if h.strip()]
@@ -64,6 +70,7 @@ app.include_router(connectors.router)
 app.include_router(observability_router.router)
 app.include_router(access.router)
 app.include_router(sso.router)
+app.include_router(me_router.router)
 
 
 @app.get("/metrics", include_in_schema=False)

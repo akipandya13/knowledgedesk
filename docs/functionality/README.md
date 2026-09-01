@@ -74,7 +74,8 @@ Permissions are named from the RBAC model in
 |---|------------|
 | 31 | [Workspace insights](31-workspace-insights.md) |
 | 32 | [Query history](32-query-history.md) |
-| 33 | [Audit log](33-audit-log.md) |
+| 33 | [Audit log](33-audit-log.md) — tamper-evident, hash-chained, filterable, CSV export |
+| 50 | [User activity tracking](50-user-activity-tracking.md) — behavioural stream, per-user timeline, self-service view |
 | 49 | [Security event logging](49-security-event-logging.md) — audit + SIEM stream, authz denials, pw expiry |
 | 34 | [Platform administration](34-platform-administration.md) |
 | 35 | [Collections view](35-collections-view.md) |

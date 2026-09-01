@@ -8,16 +8,28 @@ cross-tenant stats. Superadmin has NO access to tenant document content.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import csv
+import datetime as dt
+import io
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from sqlalchemy import func
+
+import secrets as _secrets
 
 from ..auth import (Principal, get_db, require, require_superadmin, tenant_ctx)
 from ..rbac import Permission
 from ..config import get_settings
 from ..crypto import decrypt_secrets, encrypt_secrets
-from ..database import (AuditLog, Document, ModelConnector, QueryLog, Tenant,
-                        User, new_api_key)
+from ..database import (Document, ModelConnector, QueryLog,
+                        ROLE_TENANT_ADMIN, TENANT_STATUS_ACTIVE,
+                        TENANT_STATUS_SUSPENDED, Tenant, User, new_api_key)
+from .. import authn
+from .. import security
+from ..services import activity as activity_svc
+from ..services import tenants as tenants_svc
 from ..model_catalog import (CONNECTOR_PROVIDERS, MODEL_SETTING_KEYS,
                              SAFE_DEMO_OLLAMA_MODELS, catalog_payload, profile_defaults)
 from ..tenant_settings import (effective_settings, embedding_locked,
@@ -161,9 +173,9 @@ def create_connector(req: ConnectorCreate, principal=Depends(require(Permission.
     )
     db.add(conn)
     db.commit()
-    audit.record(db, action="tenant.model_connector_created", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=tenant.id,
-                 detail=f"{req.kind}:{req.provider}:{conn.model_id} (#{conn.id})")
+    audit.record(db, action="tenant.model_connector_created", principal=principal,
+                 tenant_id=tenant.id, target_type="model_connector", target_id=conn.id,
+                 detail=f"{req.kind}:{req.provider}:{conn.model_id}")
     return _connector_public(conn)
 
 
@@ -187,6 +199,8 @@ def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(P
             raise HTTPException(409, "This embedding connector is locked: the workspace already has indexed "
                                      "documents. You may rotate credentials but not change the model or dimensions.")
 
+    before = {"name": conn.name, "model_id": conn.model_id,
+              "config": dict(conn.config_json or {}), "is_active": bool(conn.is_active)}
     if req.name is not None:
         conn.name = req.name.strip() or conn.name
     if req.model_id is not None:
@@ -195,19 +209,28 @@ def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(P
         conn.config_json = req.config or {}
     if req.is_active is not None:
         conn.is_active = req.is_active
+    secret_rotated = False
     if req.secrets is not None:
         current = decrypt_secrets(conn.secret_encrypted)
         for k, v in req.secrets.items():
             if v == "":
                 current.pop(k, None)
+                secret_rotated = True
             elif v is not None:
                 current[k] = v
+                secret_rotated = True
         conn.secret_encrypted = encrypt_secrets(current)
 
     db.merge(conn)
     db.commit()
-    audit.record(db, action="tenant.model_connector_updated", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=tenant.id, detail=f"#{conn.id}")
+    after = {"name": conn.name, "model_id": conn.model_id,
+             "config": dict(conn.config_json or {}), "is_active": bool(conn.is_active)}
+    changed = audit.diff(before, after)
+    if secret_rotated:
+        changed["secrets"] = ["***", "***"]
+    audit.record(db, action="tenant.model_connector_updated", principal=principal,
+                 tenant_id=tenant.id, target_type="model_connector",
+                 target_id=conn.id, changes=changed or None)
     return _connector_public(conn)
 
 
@@ -221,10 +244,12 @@ def delete_connector(cid: int, principal=Depends(require(Permission.MODEL_CONNEC
     if str(conn.id) in (llm_sel, emb_sel):
         raise HTTPException(409, "Connector is currently selected in Settings. Switch to another "
                                  "connector first, then delete this one.")
+    name = conn.name
     db.delete(conn)
     db.commit()
-    audit.record(db, action="tenant.model_connector_deleted", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=tenant.id, detail=f"#{cid}")
+    audit.record(db, action="tenant.model_connector_deleted", principal=principal,
+                 tenant_id=tenant.id, target_type="model_connector", target_id=cid,
+                 detail=name)
     return {"deleted": cid}
 
 
@@ -278,7 +303,8 @@ def update_tenant_settings(req: TenantSettingsUpdate,
                                      "indexed documents. Delete the tenant or re-index from scratch to "
                                      "change the embedding model.")
 
-    merged = dict(tenant.settings_json or {})
+    prev_settings = dict(tenant.settings_json or {})
+    merged = dict(prev_settings)
     if incoming.get("model_profile"):
         merged.update(profile_defaults(incoming["model_profile"]))
     merged.update(incoming)
@@ -320,9 +346,11 @@ def update_tenant_settings(req: TenantSettingsUpdate,
     tenant.settings_json = merged
     db.merge(tenant)
     db.commit()
-    audit.record(db, action="tenant.model_settings_changed", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=tenant.id,
-                 detail=str(incoming))
+    changed = audit.diff(prev_settings, merged)
+    audit.record(db, action="tenant.model_settings_changed", principal=principal,
+                 tenant_id=tenant.id, target_type="workspace_settings",
+                 target_id=tenant.id, changes=changed or None,
+                 detail="" if changed else "no effective change")
     return {"settings": merged, "effective": effective_settings(tenant), "note": safe_note}
 
 
@@ -390,89 +418,351 @@ def enterprise_readiness(tenant=Depends(tenant_ctx(Permission.SETTINGS_READ)), d
     }
 
 
-# ── Audit log (tenant-scoped) ────────────────────────────────────────
+# ── Governance: audit trail & user activity ─────────────────────────
+# Read side of app.services.audit (tamper-evident) and app.services.activity
+# (behavioural). Query builders + hash-chain verification live in those
+# services; these routes only parse params, gate on a permission and shape the
+# response (JSON, or CSV for a compliance hand-off).
+
+def _parse_ts(value: str | None):
+    if not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(422, f"Invalid timestamp: {value!r} (use ISO-8601)") from exc
+
+
+def _csv_response(rows: list[dict], columns: list[str], filename: str) -> PlainTextResponse:
+    buf = io.StringIO()
+    w = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+    w.writeheader()
+    for r in rows:
+        w.writerow({c: _flat(r.get(c)) for c in columns})
+    return PlainTextResponse(buf.getvalue(), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _flat(v):
+    if isinstance(v, (dict, list)):
+        import json
+        return json.dumps(v, separators=(",", ":"), sort_keys=True)
+    return "" if v is None else v
+
+
+_AUDIT_CSV_COLS = ["id", "seq", "created_at", "actor", "actor_role", "action",
+                   "target_type", "target_id", "ip", "detail", "entry_hash"]
+_ACTIVITY_CSV_COLS = ["id", "created_at", "actor", "actor_role", "action",
+                      "category", "target_type", "target_id", "method", "route",
+                      "status", "ip"]
+
 
 @router.get("/audit")
 def tenant_audit(limit: int = 100,
+                 action: str | None = None,
+                 action_prefix: str | None = Query(None, alias="prefix"),
+                 actor: str | None = None,
+                 target_type: str | None = None,
+                 target_id: str | None = None,
+                 since: str | None = None, until: str | None = None,
+                 before_id: int | None = None,
+                 fmt: str = Query("json", alias="format"),
                  principal: Principal = Depends(require(Permission.AUDIT_READ)),
                  db=Depends(get_db)):
-    rows = (db.query(AuditLog)
-            .filter(AuditLog.tenant_id == principal.tenant.id)
-            .order_by(AuditLog.created_at.desc())
-            .limit(min(limit, 500)).all())
-    return [{"id": r.id, "actor": r.actor_email, "action": r.action,
-             "detail": r.detail,
-             "created_at": r.created_at.isoformat() if r.created_at else None}
-            for r in rows]
+    """Filtered, newest-first slice of this workspace's audit trail.
+
+    ``format=csv`` streams the same rows for a compliance hand-off (and is itself
+    recorded as an ``export.audit`` activity event). Page with ``before_id``.
+    """
+    rows = audit.list_entries(
+        db, tenant_id=principal.tenant.id, action=action, action_prefix=action_prefix,
+        actor=actor, target_type=target_type, target_id=target_id,
+        since=_parse_ts(since), until=_parse_ts(until), before_id=before_id,
+        limit=limit)
+    out = [audit.serialize(r) for r in rows]
+    if fmt == "csv":
+        activity_svc.record(db, action="export.audit", category="export",
+                            principal=principal, target_type="audit_log",
+                            meta={"rows": len(out), "filters": {
+                                "action": action, "prefix": action_prefix,
+                                "actor": actor, "since": since, "until": until}})
+        audit.record(db, action="audit.exported", principal=principal,
+                     target_type="audit_log", detail=f"{len(out)} rows (csv)")
+        return _csv_response(out, _AUDIT_CSV_COLS, "audit-log.csv")
+    return out
 
 
-# ── Platform admin: tenant lifecycle (superadmin only) ───────────────
+@router.get("/audit/verify")
+def tenant_audit_verify(principal: Principal = Depends(require(Permission.AUDIT_READ)),
+                        db=Depends(get_db)):
+    """Recompute the workspace's hash chain and report integrity."""
+    return audit.verify_chain(db, tenant_id=principal.tenant.id)
+
+
+@router.get("/audit/history")
+def tenant_audit_history(target_type: str, target_id: str, limit: int = 100,
+                         principal: Principal = Depends(require(Permission.AUDIT_READ)),
+                         db=Depends(get_db)):
+    """Tamper-evident data-modification history for one entity — every audit
+    entry that names it as the target, newest first, each with its
+    ``changes`` ({field: [old, new]}) where one was captured."""
+    rows = audit.list_entries(db, tenant_id=principal.tenant.id,
+                              target_type=target_type, target_id=target_id,
+                              limit=limit)
+    return [audit.serialize(r) for r in rows]
+
+
+@router.get("/activity")
+def tenant_activity(limit: int = 100,
+                    user_id: int | None = None,
+                    action: str | None = None,
+                    action_prefix: str | None = Query(None, alias="prefix"),
+                    category: str | None = None,
+                    actor: str | None = None,
+                    target_type: str | None = None,
+                    target_id: str | None = None,
+                    since: str | None = None, until: str | None = None,
+                    before_id: int | None = None,
+                    fmt: str = Query("json", alias="format"),
+                    principal: Principal = Depends(require(Permission.ACTIVITY_READ)),
+                    db=Depends(get_db)):
+    """The behavioural stream for this workspace — who viewed / ran / exported
+    what. Filter by ``user_id`` for a per-person timeline."""
+    rows = activity_svc.list_entries(
+        db, tenant_id=principal.tenant.id, user_id=user_id, action=action,
+        action_prefix=action_prefix, category=category, actor=actor,
+        target_type=target_type, target_id=target_id, since=_parse_ts(since),
+        until=_parse_ts(until), before_id=before_id, limit=limit)
+    out = [activity_svc.serialize(r) for r in rows]
+    if fmt == "csv":
+        activity_svc.record(db, action="export.activity", category="export",
+                            principal=principal, target_type="activity_log",
+                            meta={"rows": len(out), "user_id": user_id})
+        audit.record(db, action="activity.exported", principal=principal,
+                     target_type="activity_log", detail=f"{len(out)} rows (csv)")
+        return _csv_response(out, _ACTIVITY_CSV_COLS, "activity-log.csv")
+    return out
+
+
+# ── Platform admin: tenant (organization) lifecycle — superadmin only ─
+# Mechanics live in app.services.tenants; these routes parse input, gate on
+# `tenant.manage` (superadmin) and record a platform-chain audit entry.
+
+def _get_tenant_or_404(db, slug: str) -> Tenant:
+    tenant = db.query(Tenant).filter(Tenant.slug == slug).first()
+    if not tenant:
+        raise HTTPException(404, "Workspace not found")
+    return tenant
+
 
 class TenantCreate(BaseModel):
     slug: str
     name: str
+    admin_email: str | None = None       # provision the first workspace admin
+    admin_full_name: str = ""
+    entitlements: list[str] = []
+
+
+class TenantUpdate(BaseModel):
+    name: str | None = None
+    entitlements: list[str] | None = None
+
+
+class TenantSuspend(BaseModel):
+    reason: str = ""
 
 
 @router.post("/tenants")
-def create_tenant(req: TenantCreate,
-                  principal=Depends(require_superadmin),
+def create_tenant(req: TenantCreate, principal=Depends(require_superadmin),
                   db=Depends(get_db)):
     slug = req.slug.strip().lower().replace(" ", "-")
+    if not slug:
+        raise HTTPException(400, "slug is required")
     if db.query(Tenant).filter(Tenant.slug == slug).first():
-        raise HTTPException(409, "Tenant slug already exists")
-    tenant = Tenant(slug=slug, name=req.name.strip(), api_key=new_api_key())
+        raise HTTPException(409, "Workspace slug already exists")
+
+    bad = set(req.entitlements) - authn.KNOWN_ENTITLEMENTS
+    if bad:
+        raise HTTPException(400, f"Unknown entitlements: {sorted(bad)}")
+
+    email = req.admin_email.strip().lower() if req.admin_email else None
+    if email and db.query(User).filter(User.email == email).first():
+        raise HTTPException(409, f"A user with email {email} already exists")
+
+    settings_json = {"entitlements": sorted(set(req.entitlements))} if req.entitlements else {}
+    tenant = Tenant(slug=slug, name=req.name.strip() or slug, api_key=new_api_key(),
+                    settings_json=settings_json, status=TENANT_STATUS_ACTIVE)
     db.add(tenant)
     db.commit()
-    audit.record(db, action="tenant.created", actor_email=principal.email,
-                 actor_role=principal.role, detail=slug)
-    return {"slug": tenant.slug, "name": tenant.name, "api_key": tenant.api_key,
-            "id": tenant.id}
+
+    admin_out = None
+    if email:
+        temp_pw = "Kd-" + _secrets.token_urlsafe(9)
+        admin = User(email=email, full_name=(req.admin_full_name.strip() or email),
+                     password_hash=security.hash_password(temp_pw),
+                     role=ROLE_TENANT_ADMIN, tenant_id=tenant.id,
+                     force_password_change=1)
+        db.add(admin)
+        db.commit()
+        audit.record(db, action="user.created", principal=principal,
+                     tenant_id=tenant.id, target_type="user", target_id=admin.id,
+                     detail=f"{email} as tenant_admin (workspace bootstrap)")
+        admin_out = {"email": email, "temporary_password": temp_pw,
+                     "note": "Shown once — the admin must change it at first sign-in."}
+
+    audit.record(db, action="tenant.created", principal=principal, tenant_id=None,
+                 target_type="tenant", target_id=tenant.id, detail=slug,
+                 meta={"entitlements": settings_json.get("entitlements", []),
+                       "admin_provisioned": bool(admin_out)})
+    return {"id": tenant.id, "slug": tenant.slug, "name": tenant.name,
+            "api_key": tenant.api_key, "status": tenant.status, "admin": admin_out}
 
 
 @router.get("/tenants")
 def list_tenants(principal=Depends(require_superadmin), db=Depends(get_db)):
-    tenants = db.query(Tenant).all()
     out = []
-    for t in tenants:
-        user_count = db.query(User).filter(User.tenant_id == t.id).count()
-        doc_count = db.query(Document).filter(Document.tenant_id == t.id).count()
+    for t in db.query(Tenant).order_by(Tenant.created_at).all():
         out.append({
-            "id": t.id, "slug": t.slug, "name": t.name,
-            "api_key": t.api_key,
-            "users": user_count,
-            "documents": doc_count,
+            "id": t.id, "slug": t.slug, "name": t.name, "api_key": t.api_key,
+            "status": t.status or TENANT_STATUS_ACTIVE,
+            "suspended_reason": t.suspended_reason or None,
+            "users": db.query(User).filter(User.tenant_id == t.id).count(),
+            "documents": db.query(Document).filter(Document.tenant_id == t.id).count(),
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
     return out
 
 
+@router.get("/tenants/{slug}")
+def get_tenant(slug: str, principal=Depends(require_superadmin), db=Depends(get_db)):
+    tenant = _get_tenant_or_404(db, slug)
+    return tenants_svc.tenant_detail(db, tenant,
+                                     entitlements=authn.tenant_entitlements(tenant))
+
+
+@router.patch("/tenants/{slug}")
+def update_tenant(slug: str, req: TenantUpdate, principal=Depends(require_superadmin),
+                  db=Depends(get_db)):
+    tenant = _get_tenant_or_404(db, slug)
+    st = dict(tenant.settings_json or {})
+    before = {"name": tenant.name,
+              "entitlements": sorted(st.get("entitlements") or [])}
+    if req.name is not None:
+        tenant.name = req.name.strip() or tenant.name
+    if req.entitlements is not None:
+        bad = set(req.entitlements) - authn.KNOWN_ENTITLEMENTS
+        if bad:
+            raise HTTPException(400, f"Unknown entitlements: {sorted(bad)}")
+        st["entitlements"] = sorted(set(req.entitlements))
+        tenant.settings_json = st
+    db.merge(tenant)
+    db.commit()
+    after = {"name": tenant.name,
+             "entitlements": sorted((tenant.settings_json or {}).get("entitlements") or [])}
+    audit.record(db, action="tenant.updated", principal=principal, tenant_id=None,
+                 target_type="tenant", target_id=tenant.id,
+                 changes=audit.diff(before, after) or None, detail=slug)
+    return tenants_svc.tenant_detail(db, tenant,
+                                     entitlements=authn.tenant_entitlements(tenant))
+
+
+@router.post("/tenants/{slug}/suspend")
+def suspend_tenant(slug: str, req: TenantSuspend, principal=Depends(require_superadmin),
+                   db=Depends(get_db)):
+    tenant = _get_tenant_or_404(db, slug)
+    if tenant.status == TENANT_STATUS_SUSPENDED:
+        return tenants_svc.tenant_detail(db, tenant,
+                                         entitlements=authn.tenant_entitlements(tenant))
+    revoked = tenants_svc.set_status(db, tenant, status=TENANT_STATUS_SUSPENDED,
+                                     reason=req.reason)
+    audit.record(db, action="tenant.suspended", principal=principal, tenant_id=None,
+                 target_type="tenant", target_id=tenant.id, detail=slug,
+                 changes={"status": [TENANT_STATUS_ACTIVE, TENANT_STATUS_SUSPENDED]},
+                 meta={"reason": req.reason or "", "sessions_revoked": revoked})
+    return tenants_svc.tenant_detail(db, tenant,
+                                     entitlements=authn.tenant_entitlements(tenant))
+
+
+@router.post("/tenants/{slug}/reactivate")
+def reactivate_tenant(slug: str, principal=Depends(require_superadmin), db=Depends(get_db)):
+    tenant = _get_tenant_or_404(db, slug)
+    if tenant.status == TENANT_STATUS_ACTIVE:
+        return tenants_svc.tenant_detail(db, tenant,
+                                         entitlements=authn.tenant_entitlements(tenant))
+    tenants_svc.set_status(db, tenant, status=TENANT_STATUS_ACTIVE)
+    audit.record(db, action="tenant.reactivated", principal=principal, tenant_id=None,
+                 target_type="tenant", target_id=tenant.id, detail=slug,
+                 changes={"status": [TENANT_STATUS_SUSPENDED, TENANT_STATUS_ACTIVE]})
+    return tenants_svc.tenant_detail(db, tenant,
+                                     entitlements=authn.tenant_entitlements(tenant))
+
+
 @router.delete("/tenants/{slug}")
 def delete_tenant(slug: str, principal=Depends(require_superadmin), db=Depends(get_db)):
-    tenant = db.query(Tenant).filter(Tenant.slug == slug).first()
-    if not tenant:
-        raise HTTPException(404, "Tenant not found")
-    vectorstore.drop_tenant(tenant.slug)
-    db.query(QueryLog).filter(QueryLog.tenant_id == tenant.id).delete()
-    db.query(User).filter(User.tenant_id == tenant.id).delete()
-    db.delete(tenant)
-    db.commit()
-    audit.record(db, action="tenant.deleted", actor_email=principal.email,
-                 actor_role=principal.role, detail=slug)
-    return {"deleted": slug}
+    tenant = _get_tenant_or_404(db, slug)
+    tid = tenant.id
+    tally = tenants_svc.purge_tenant_data(db, tenant)
+    audit.record(db, action="tenant.deleted", principal=principal, tenant_id=None,
+                 target_type="tenant", target_id=tid, detail=slug,
+                 meta={"rows_deleted": tally})
+    return {"deleted": slug, "rows_deleted": tally}
 
 
 # ── Platform-wide audit log (superadmin only) ────────────────────────
 
 @router.get("/platform/audit")
-def platform_audit(limit: int = 200, principal=Depends(require_superadmin),
-                   db=Depends(get_db)):
-    rows = (db.query(AuditLog)
-            .order_by(AuditLog.created_at.desc())
-            .limit(min(limit, 1000)).all())
-    return [{"id": r.id, "tenant_id": r.tenant_id, "actor": r.actor_email,
-             "role": r.actor_role, "action": r.action, "detail": r.detail,
-             "created_at": r.created_at.isoformat() if r.created_at else None}
-            for r in rows]
+def platform_audit(limit: int = 200,
+                   action: str | None = None,
+                   action_prefix: str | None = Query(None, alias="prefix"),
+                   actor: str | None = None,
+                   tenant_id: int | None = None,
+                   target_type: str | None = None,
+                   since: str | None = None, until: str | None = None,
+                   before_id: int | None = None,
+                   fmt: str = Query("json", alias="format"),
+                   principal=Depends(require_superadmin), db=Depends(get_db)):
+    """Audit trail across every workspace plus platform-level events."""
+    rows = audit.list_entries(
+        db, platform_all=(tenant_id is None), tenant_id=tenant_id, action=action,
+        action_prefix=action_prefix, actor=actor, target_type=target_type,
+        since=_parse_ts(since), until=_parse_ts(until), before_id=before_id,
+        limit=limit)
+    out = [audit.serialize(r) for r in rows]
+    if fmt == "csv":
+        return _csv_response(out, ["tenant_id", *_AUDIT_CSV_COLS], "platform-audit-log.csv")
+    return out
+
+
+@router.get("/platform/audit/verify")
+def platform_audit_verify(tenant_id: int | None = None,
+                          principal=Depends(require_superadmin), db=Depends(get_db)):
+    """Verify one workspace's hash chain, or every chain when ``tenant_id`` is
+    omitted."""
+    return audit.verify_chain(db, platform_all=(tenant_id is None), tenant_id=tenant_id)
+
+
+@router.get("/platform/activity")
+def platform_activity(limit: int = 200,
+                      tenant_id: int | None = None,
+                      user_id: int | None = None,
+                      action: str | None = None,
+                      action_prefix: str | None = Query(None, alias="prefix"),
+                      category: str | None = None,
+                      actor: str | None = None,
+                      since: str | None = None, until: str | None = None,
+                      before_id: int | None = None,
+                      fmt: str = Query("json", alias="format"),
+                      principal=Depends(require_superadmin), db=Depends(get_db)):
+    """The behavioural stream across every workspace."""
+    rows = activity_svc.list_entries(
+        db, platform_all=(tenant_id is None), tenant_id=tenant_id, user_id=user_id,
+        action=action, action_prefix=action_prefix, category=category, actor=actor,
+        since=_parse_ts(since), until=_parse_ts(until), before_id=before_id,
+        limit=limit)
+    out = [activity_svc.serialize(r) for r in rows]
+    if fmt == "csv":
+        return _csv_response(out, ["tenant_id", *_ACTIVITY_CSV_COLS], "platform-activity-log.csv")
+    return out
 
 
 @router.get("/platform/stats")

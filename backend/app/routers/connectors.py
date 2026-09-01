@@ -139,9 +139,9 @@ def create_connector(req: ConnectorCreate, principal=Depends(require(Permission.
     )
     db.add(conn)
     db.commit()
-    audit.record(db, action="tenant.data_connector_created", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=tenant.id,
-                 detail=f"{req.provider} (#{conn.id})")
+    audit.record(db, action="tenant.data_connector_created", principal=principal,
+                 tenant_id=tenant.id, target_type="data_connector", target_id=conn.id,
+                 detail=f"{req.provider}: {conn.name}")
     return _public(conn)
 
 
@@ -149,6 +149,8 @@ def create_connector(req: ConnectorCreate, principal=Depends(require(Permission.
 def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)),
                      db=Depends(get_db)):
     conn = _get_owned(db, principal, cid)
+    before = {"name": conn.name, "config": dict(conn.config_json or {}),
+              "is_active": bool(conn.is_active)}
 
     if req.name is not None:
         conn.name = req.name.strip() or conn.name
@@ -156,30 +158,41 @@ def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(P
         conn.config_json = req.config or {}
     if req.is_active is not None:
         conn.is_active = req.is_active
+    secret_rotated = False
     if req.secrets is not None:
         current = decrypt_secrets(conn.secret_encrypted)
         for k, v in req.secrets.items():
             if v == "":
                 current.pop(k, None)
+                secret_rotated = True
             elif v is not None:
                 current[k] = v
+                secret_rotated = True
         conn.secret_encrypted = encrypt_secrets(current)
 
     db.merge(conn)
     db.commit()
-    audit.record(db, action="tenant.data_connector_updated", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=conn.tenant_id, detail=f"#{conn.id}")
+    after = {"name": conn.name, "config": dict(conn.config_json or {}),
+             "is_active": bool(conn.is_active)}
+    changed = audit.diff(before, after)
+    if secret_rotated:
+        changed["secrets"] = ["***", "***"]
+    audit.record(db, action="tenant.data_connector_updated", principal=principal,
+                 tenant_id=conn.tenant_id, target_type="data_connector",
+                 target_id=conn.id, changes=changed or None)
     return _public(conn)
 
 
 @router.delete("/{cid}")
 def delete_connector(cid: int, principal=Depends(require(Permission.DATA_CONNECTOR_MANAGE)), db=Depends(get_db)):
     conn = _get_owned(db, principal, cid)
+    tid, name = conn.tenant_id, conn.name
     db.query(ConnectorSyncRun).filter(ConnectorSyncRun.connector_id == cid).delete()
     db.delete(conn)
     db.commit()
-    audit.record(db, action="tenant.data_connector_deleted", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=conn.tenant_id, detail=f"#{cid}")
+    audit.record(db, action="tenant.data_connector_deleted", principal=principal,
+                 tenant_id=tid, target_type="data_connector", target_id=cid,
+                 detail=name)
     return {"deleted": cid}
 
 

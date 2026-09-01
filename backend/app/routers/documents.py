@@ -25,7 +25,7 @@ from .. import authz
 from ..auth import Principal, get_db, log_denied, require
 from ..database import (DOC_SCOPE_TENANT, DOC_SCOPE_WORKSPACE, Document, User)
 from ..rbac import Permission
-from ..services import vectorstore
+from ..services import audit, vectorstore
 from ..services.ingestion import queue_document
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -115,6 +115,11 @@ async def upload(background: BackgroundTasks,
                                      scope=doc_scope, owner_user_id=owner_id)
         if doc:
             accepted.append(_doc_out(doc))
+            audit.record(db, action="document.uploaded", principal=principal,
+                         target_type="document", target_id=doc.id,
+                         detail=f"{name} ({doc_scope})",
+                         meta={"scope": doc_scope, "owner_user_id": owner_id,
+                               "source": "upload"})
         else:
             rejected.append({"filename": name, "reason": reason})
     return {"accepted": accepted, "rejected": rejected}
@@ -238,4 +243,7 @@ def delete_document(doc_id: int,
     doc.is_active = False
     doc.status = "deleted"
     db.commit()
+    audit.record(db, action="document.deleted", principal=principal,
+                 target_type="document", target_id=doc.id, detail=doc.filename,
+                 meta={"scope": doc.scope, "owner_user_id": doc.owner_user_id})
     return {"deleted": doc_id}

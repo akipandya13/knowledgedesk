@@ -9,7 +9,7 @@ import { Modal } from "@/components/Modal";
 import { useToast } from "@/components/Toast";
 
 export default function UsersPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const { toast } = useToast();
   const [rows, setRows] = useState<UserRow[] | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -140,6 +140,11 @@ export default function UsersPage() {
                     <button className="btn ghost sm" disabled={self} onClick={() => toggleActive(u)}>
                       {u.is_active ? "Disable" : "Enable"}
                     </button>
+                    {hasPermission("audit.read") && (
+                      <a className="btn ghost sm" href={`/audit?target_type=user&target_id=${u.id}`}>
+                        History
+                      </a>
+                    )}
                   </div>
                 </td>
               </tr>

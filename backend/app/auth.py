@@ -27,11 +27,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 
 from .config import get_settings
 from .database import (ApiKey, ROLE_SERVICE, ROLE_SUPERADMIN, SessionLocal,
-                       Tenant, User, utcnow)
+                       TENANT_STATUS_ACTIVE, Tenant, User, utcnow)
 from .rbac import (Permission, WORKSPACE_PERMISSIONS, has_permission,
                    missing_permissions)
 from .security import decode_access_token, hash_api_key
@@ -54,10 +54,28 @@ class Principal:
     # Resolved once per request in get_principal; falls back to the built-in
     # matrix for principals created outside a request.
     perms: frozenset[str] = frozenset()
+    # Identity of the API key behind a service principal (None for humans and
+    # the legacy plaintext Tenant.api_key). Recorded in audit/activity rows so a
+    # machine action is attributable to a specific, revocable key.
+    api_key_id: int | None = None
+    api_key_name: str = ""
+    api_key_prefix: str = ""
 
     @property
     def email(self) -> str:
         return self.user.email if self.user else "api-key"
+
+    @property
+    def actor_label(self) -> str:
+        """How this principal is named in the audit/activity trail — a human's
+        email, or ``api-key:<name>`` / ``api-key:<prefix>`` for a service key."""
+        if self.user:
+            return self.user.email
+        if self.api_key_name:
+            return f"api-key:{self.api_key_name}"
+        if self.api_key_prefix:
+            return f"api-key:{self.api_key_prefix}"
+        return "api-key"
 
     @property
     def user_id(self) -> int | None:
@@ -80,7 +98,27 @@ def _reject(reason: str, status: int, message: str) -> None:
     raise HTTPException(status, message)
 
 
-def get_principal(authorization: str = Header(default=""),
+def _stash_actor(request: Request | None, principal: "Principal") -> None:
+    """Put a light identity dict on the ASGI scope so the activity middleware
+    (which runs outside the DI/session scope) can attribute the request without
+    touching a detached ORM object."""
+    if request is None:
+        return
+    try:
+        request.scope["kd_actor"] = {
+            "user_id": principal.user_id,
+            "email": principal.actor_label,
+            "role": principal.role,
+            "tenant_id": principal.tenant.id if principal.tenant else None,
+            "api_key_id": principal.api_key_id,
+            "api_key_name": principal.api_key_name,
+        }
+    except Exception:                                    # pragma: no cover
+        pass
+
+
+def get_principal(request: Request = None,  # noqa: B008 — FastAPI injects it
+                  authorization: str = Header(default=""),
                   x_api_key: str = Header(default=""),
                   x_tenant_key: str = Header(default=""),
                   db=Depends(get_db)) -> Principal:
@@ -97,27 +135,37 @@ def get_principal(authorization: str = Header(default=""),
         tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
         if user.role != ROLE_SUPERADMIN and not tenant:
             _reject("no_workspace", 401, "Account is not attached to a workspace")
+        if (user.role != ROLE_SUPERADMIN and tenant
+                and tenant.status != TENANT_STATUS_ACTIVE):
+            _reject("tenant_suspended", 403, "This workspace is suspended")
         principal = Principal(role=user.role, user=user, tenant=tenant,
                               perms=_resolve_perms(db, user.role, user))
         _bind_observability(principal)
+        _stash_actor(request, principal)
         return principal
 
     # Door 2: tenant service key. Prefer the hashed, revocable ApiKey table;
     # fall back to the legacy single plaintext Tenant.api_key.
     service_key = (x_api_key or x_tenant_key).strip()
     if service_key:
-        tenant = _resolve_api_key(db, service_key)
+        tenant, key_row = _resolve_api_key(db, service_key)
         if not tenant:
             _reject("bad_api_key", 401, "Invalid or expired API key")
+        if tenant.status != TENANT_STATUS_ACTIVE:
+            _reject("tenant_suspended", 403, "This workspace is suspended")
         principal = Principal(role=ROLE_SERVICE, tenant=tenant,
-                              perms=_resolve_perms(db, ROLE_SERVICE, None))
+                              perms=_resolve_perms(db, ROLE_SERVICE, None),
+                              api_key_id=key_row.id if key_row else None,
+                              api_key_name=key_row.name if key_row else "",
+                              api_key_prefix=key_row.prefix if key_row else "")
         _bind_observability(principal)
+        _stash_actor(request, principal)
         return principal
 
     raise HTTPException(401, "Not authenticated")
 
 
-def _resolve_api_key(db, raw: str) -> Tenant | None:
+def _resolve_api_key(db, raw: str) -> "tuple[Tenant | None, ApiKey | None]":
     row = (db.query(ApiKey)
            .filter(ApiKey.key_hash == hash_api_key(raw), ApiKey.revoked == 0)
            .first())
@@ -129,11 +177,12 @@ def _resolve_api_key(db, raw: str) -> Tenant | None:
                 exp = exp.replace(tzinfo=_dt.timezone.utc)
             import datetime as _dt
             if exp < _dt.datetime.now(_dt.timezone.utc):
-                return None
+                return None, None
         row.last_used_at = utcnow()
         db.commit()
-        return db.get(Tenant, row.tenant_id)
-    return db.query(Tenant).filter(Tenant.api_key == raw).first()  # legacy
+        return db.get(Tenant, row.tenant_id), row
+    legacy = db.query(Tenant).filter(Tenant.api_key == raw).first()  # legacy
+    return legacy, None
 
 
 def _resolve_perms(db, role: str, user) -> frozenset[str]:

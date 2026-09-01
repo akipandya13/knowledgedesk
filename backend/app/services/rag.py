@@ -13,7 +13,7 @@ from .. import observability as obs
 from ..config import get_settings
 from ..database import SessionLocal, QueryLog, Tenant
 from ..tenant_settings import effective_settings, resolve_model_config, as_bool
-from . import embeddings, llm, vectorstore, reranker
+from . import activity, embeddings, llm, vectorstore, reranker
 
 NOT_FOUND_MESSAGE = ("I couldn't find anything in the company knowledge base that "
                      "answers this. It has been logged as a knowledge gap so the "
@@ -66,7 +66,37 @@ def retrieve(tenant: Tenant, question: str, filters: dict | None = None,
             break
         kept.append(h)
         used += len(h["text"])
+
+    _record_retrieval(tenant, access, kept)
     return kept
+
+
+def _record_retrieval(tenant: Tenant, access: dict | None, hits: list[dict]) -> None:
+    """Activity trail: one ``document.retrieved`` row per distinct document a
+    user's question actually surfaced content from. Best-effort — a logging
+    failure must not affect the answer."""
+    uid = (access or {}).get("user_id")
+    if not uid or not hits:
+        return
+    seen: dict[int, dict] = {}
+    for h in hits:
+        did = h.get("doc_id")
+        if did is not None and did not in seen:
+            seen[did] = h
+    if not seen:
+        return
+    db = SessionLocal()
+    try:
+        for did, h in seen.items():
+            activity.record(db, action="document.retrieved", category="read",
+                            user_id=uid, tenant_id=tenant.id,
+                            target_type="document", target_id=did,
+                            meta={"filename": h.get("filename"),
+                                  "score": round(h.get("score") or 0, 3)})
+    except Exception:                                    # pragma: no cover
+        pass
+    finally:
+        db.close()
 
 
 def _blocked_model_answer(exc: Exception) -> str:

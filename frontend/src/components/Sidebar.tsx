@@ -59,6 +59,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/users", label: "Users", icon: IconUsers, perm: "user.manage" },
       { href: "/audit", label: "Audit log", icon: IconAudit, perm: "audit.read" },
+      { href: "/activity", label: "User activity", icon: IconHistory, perm: "activity.read" },
       { href: "/connectors", label: "Data connectors", icon: IconPlug, perm: "data_connector.manage" },
       { href: "/model-connectors", label: "Model connectors", icon: IconModel, perm: "model_connector.manage" },
       { href: "/settings", label: "Settings", icon: IconSettings, perm: "settings.write" },

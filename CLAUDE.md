@@ -24,6 +24,12 @@ Deep reference already written — **use it, keep it current**:
   grants, resource ACLs and clearance, layered on RBAC_V1.
 - [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) — the metrics/events/traces
   architecture and how to add a sink.
+- [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md) — the two records (tamper-evident
+  `audit_log` hash chain + behavioural `activity_log`), how to add coverage,
+  chain verification, retention (`scripts/purge_logs.py`).
+- [`docs/TENANCY.md`](docs/TENANCY.md) — isolation layers, the organization
+  lifecycle (provision/configure/suspend/delete), `Tenant.status`,
+  `TENANT_SCOPED_MODELS`, entitlements.
 - [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — login/MFA/SSO/sessions/
   API-keys/password-policy and the `sso` subscription entitlement.
 - [`docs/DEPLOYMENT_TLS.md`](docs/DEPLOYMENT_TLS.md) — Caddy TLS termination,
@@ -49,6 +55,8 @@ backend/app/
   authn.py           login rate-limiter, transactional email, entitlements, OIDC client
   crypto.py          envelope encryption at rest: KEK/DEK, EncryptedText/JSON, secret bundles
   secret_resolver.py pluggable ${provider:locator} secret resolution (env/file/vault/awssm/…)
+  request_context.py per-request ip / user-agent / request-id capture (governance)
+  activity_middleware.py  one activity_log row per authenticated API call
   model_catalog.py   model profiles + connector provider field specs (static)
   tenant_settings.py effective_settings / resolve_model_config / embedding_locked
   observability/     signal facade + pluggable sinks (metrics/events/traces)
@@ -62,7 +70,9 @@ backend/app/
     reranker.py      optional cross-encoder, best-effort
     rag.py           retrieve → rerank → ground → answer (+ streaming), query logging
     llm.py           ollama / openai_compatible / azure_foundry / bedrock / none
-    audit.py         audit.record()
+    audit.py         audit.record() + hash-chained verify_chain() (tamper-evident)
+    activity.py      activity.record() — behavioural stream (reads + writes), retention-bounded
+    tenants.py       organization lifecycle: set_status (suspend/reactivate), purge_tenant_data, tenant_detail
     connectors/      gdrive.py, sharepoint.py, base.py
 
 frontend/src/
@@ -160,7 +170,12 @@ skip it. `tsc` is the gate.
 `get_principal` resolves `{role, user, tenant}` from the verified JWT or API key.
 Route bodies read `principal.tenant` / `principal.user_id`. Never accept a
 tenant id, user id, or `scope` widening from the request body/query as
-authoritative.
+authoritative. `get_principal` also refuses a `Tenant.status != 'active'`
+workspace with 403 (superadmin exempt) — so suspension needs no per-route work.
+Superadmin-only org lifecycle lives in `services/tenants.py` +
+`routers/admin.py` (`/api/admin/tenants…`); see [`docs/TENANCY.md`](docs/TENANCY.md).
+When you add a tenant-scoped table, add it to `TENANT_SCOPED_MODELS` so
+`purge_tenant_data` cleans it on workspace deletion.
 
 ### Document scope
 
@@ -213,12 +228,29 @@ network backend and must stay lazy). Stored connector/SSO secrets are already
 covered via `crypto.decrypt_secrets(token, resolve=True)` on the runtime path.
 See [`docs/SECRETS_MANAGEMENT.md`](docs/SECRETS_MANAGEMENT.md).
 
-### Audit
+### Audit & activity (governance)
 
-Call `audit.record(db, action="...", actor_email=..., actor_role=...,
-tenant_id=..., detail=...)` on every security-relevant mutation (auth events,
-user/tenant lifecycle, settings, connectors, document deletion). Action names are
-dotted: `user.created`, `tenant.model_settings_changed`.
+Two records, complementary — see [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md):
+
+- **Audit** (`audit_log`, tamper-evident, hash-chained): call
+  `audit.record(db, action="area.verb_past", principal=principal,
+  target_type="document", target_id=doc.id, changes=audit.diff(before, after),
+  detail=...)` on every security-relevant mutation. `principal=` back-fills
+  actor/tenant (and API-key id/name); `changes={field:[old,new]}` records
+  data-modification history (goes in `meta`, hash-covered; `audit.diff` masks
+  secret fields). Rows are serialised + SHA-256-chained per workspace inside the
+  service; never write `AuditLog` by hand. `GET /api/admin/audit/verify` checks
+  the chain; `…/audit/history?target_type=&target_id=` is the per-entity timeline.
+- **Activity** (`activity_log`, behavioural, retention-bounded): the
+  `ActivityMiddleware` already logs one row per authenticated API call. Add an
+  explicit `activity.record(db, action="session.start", category="auth",
+  principal=principal, target_type=..., target_id=...)` only where the firehose
+  can't infer intent (sessions, `document.retrieved`, exports).
+- Neither call may raise into the request path (both swallow + log).
+- New governance read surface → gate with `Permission.AUDIT_READ` /
+  `Permission.ACTIVITY_READ`, mirror in `permissions.ts`.
+- Retention is manual: `scripts/purge_logs.py` (`ACTIVITY_RETENTION_DAYS` /
+  `AUDIT_RETENTION_DAYS`).
 
 ### Authentication
 

@@ -17,9 +17,10 @@ from .. import security
 from ..auth import Principal, get_db, get_principal
 from ..config import get_settings
 from ..crypto import decrypt_secrets, encrypt_secrets
-from ..database import (AuthToken, PasswordHistory, RefreshToken, Tenant, User,
+from ..database import (AuthToken, PasswordHistory, RefreshToken,
+                        ROLE_SUPERADMIN, TENANT_STATUS_ACTIVE, Tenant, User,
                         utcnow)
-from ..services import audit
+from ..services import activity, audit
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -230,6 +231,9 @@ def login(req: LoginRequest, request: Request, response: Response, db=Depends(ge
         raise HTTPException(401, GENERIC_LOGIN_ERROR)
 
     tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
+    if (user.role != ROLE_SUPERADMIN and tenant
+            and tenant.status != TENANT_STATUS_ACTIVE):
+        raise HTTPException(403, "This workspace is suspended. Contact your platform administrator.")
     if _requires_verified(tenant) and not user.email_verified:
         raise HTTPException(403, "Verify your email address before signing in — check your inbox.")
 
@@ -256,6 +260,9 @@ def login(req: LoginRequest, request: Request, response: Response, db=Depends(ge
     db.commit()
     audit.record(db, action="auth.login", actor_email=user.email,
                  actor_role=user.role, tenant_id=user.tenant_id)
+    activity.record(db, action="session.start", category="auth", user_id=user.id,
+                    actor_email=user.email, actor_role=user.role,
+                    tenant_id=user.tenant_id, meta={"mfa": False})
     obs.count("auth.logins", outcome="success", role=user.role, mfa="false")
     obs.event("auth.login", actor=user.email,
               tenant=(tenant.slug if tenant else None), role=user.role)
@@ -291,6 +298,9 @@ def login_mfa(req: MfaLoginRequest, request: Request, response: Response, db=Dep
     db.commit()
     audit.record(db, action="auth.login", actor_email=user.email,
                  actor_role=user.role, tenant_id=user.tenant_id, detail="mfa")
+    activity.record(db, action="session.start", category="auth", user_id=user.id,
+                    actor_email=user.email, actor_role=user.role,
+                    tenant_id=user.tenant_id, meta={"mfa": True})
     obs.count("auth.logins", outcome="success", role=user.role, mfa="true")
     obs.event("auth.login", actor=user.email, role=user.role, mfa=True)
     return _issue_session(db, user, request, response)
@@ -337,6 +347,12 @@ def refresh(request: Request, response: Response, req: RefreshRequest | None = N
     user = db.get(User, row.user_id)
     if not user or not user.is_active:
         raise HTTPException(401, "Account is disabled")
+    if user.role != ROLE_SUPERADMIN and user.tenant_id:
+        t = db.get(Tenant, user.tenant_id)
+        if t and t.status != TENANT_STATUS_ACTIVE:
+            row.revoked = 1
+            db.commit()
+            raise HTTPException(403, "This workspace is suspended.")
 
     row.revoked = 1
     db.commit()
@@ -359,6 +375,7 @@ def logout(response: Response, principal: Principal = Depends(get_principal),
     audit.record(db, action="auth.logout", actor_email=principal.email,
                  actor_role=principal.role,
                  tenant_id=principal.tenant.id if principal.tenant else None)
+    activity.record(db, action="session.end", category="auth", principal=principal)
     return {"ok": True}
 
 

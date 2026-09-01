@@ -19,6 +19,7 @@ const ROUTE_PERMISSION: { prefix: string; perm: Permission }[] = [
   { prefix: "/insights", perm: "insights.read" },
   { prefix: "/users", perm: "user.manage" },
   { prefix: "/audit", perm: "audit.read" },
+  { prefix: "/activity", perm: "activity.read" },
   { prefix: "/connectors", perm: "data_connector.manage" },
   { prefix: "/model-connectors", perm: "model_connector.manage" },
   { prefix: "/settings", perm: "settings.write" },

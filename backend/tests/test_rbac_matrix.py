@@ -27,7 +27,7 @@ def test_superadmin_holds_no_workspace_content_permission():
         Permission.DOC_WRITE_WORKSPACE, Permission.DOC_WRITE_TENANT,
         Permission.INSIGHTS_READ, Permission.SETTINGS_READ, Permission.SETTINGS_WRITE,
         Permission.MODEL_CONNECTOR_MANAGE, Permission.DATA_CONNECTOR_MANAGE,
-        Permission.AUDIT_READ,
+        Permission.AUDIT_READ, Permission.ACTIVITY_READ,
     }
     assert ROLE_PERMISSIONS[ROLE_SUPERADMIN].isdisjoint(workspacey)
 

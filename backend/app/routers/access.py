@@ -197,9 +197,10 @@ def create_role(req: RoleIn, principal: Principal = Depends(_manage), db=Depends
     for p in sorted(set(req.permissions)):
         db.add(RolePermission(role_id=role.id, permission=p))
     db.commit()
-    audit.record(db, action="access.role_created", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal),
-                 detail=f"{key}: {sorted(set(req.permissions))}")
+    audit.record(db, action="access.role_created", principal=principal,
+                 tenant_id=_tid(principal), target_type="role", target_id=role.id,
+                 detail=key,
+                 changes={"permissions": [[], sorted(set(req.permissions))]})
     return _role_out(db, role)
 
 
@@ -209,6 +210,10 @@ def update_role(role_id: int, req: RolePatch, principal: Principal = Depends(_ma
     role = db.get(Role, role_id)
     if not role or role.tenant_id != _tid(principal):
         raise HTTPException(404, "Role not found")
+    before_perms = sorted(p.permission for p in
+                          db.query(RolePermission).filter(RolePermission.role_id == role.id))
+    before = {"name": role.name, "description": role.description,
+              "permissions": before_perms}
     if req.name is not None:
         role.name = req.name.strip() or role.key
     if req.description is not None:
@@ -219,8 +224,13 @@ def update_role(role_id: int, req: RolePatch, principal: Principal = Depends(_ma
         for p in sorted(set(req.permissions)):
             db.add(RolePermission(role_id=role.id, permission=p))
     db.commit()
-    audit.record(db, action="access.role_updated", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal), detail=role.key)
+    after_perms = sorted(p.permission for p in
+                         db.query(RolePermission).filter(RolePermission.role_id == role.id))
+    after = {"name": role.name, "description": role.description,
+             "permissions": after_perms}
+    audit.record(db, action="access.role_updated", principal=principal,
+                 tenant_id=_tid(principal), target_type="role", target_id=role.id,
+                 detail=role.key, changes=audit.diff(before, after) or None)
     return _role_out(db, role)
 
 
@@ -231,10 +241,12 @@ def delete_role(role_id: int, principal: Principal = Depends(_manage), db=Depend
         raise HTTPException(404, "Role not found")
     db.query(RolePermission).filter(RolePermission.role_id == role.id).delete()
     db.query(PrincipalRole).filter(PrincipalRole.role_id == role.id).delete()
+    key = role.key
     db.delete(role)
     db.commit()
-    audit.record(db, action="access.role_deleted", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal), detail=role.key)
+    audit.record(db, action="access.role_deleted", principal=principal,
+                 tenant_id=_tid(principal), target_type="role", target_id=role_id,
+                 detail=key)
     return {"deleted": role_id}
 
 
@@ -382,6 +394,7 @@ def create_grant(req: GrantIn, principal: Principal = Depends(_manage), db=Depen
         PermissionGrant.subject_type == req.subject_type,
         PermissionGrant.subject_id == req.subject_id,
         PermissionGrant.permission == req.permission).first()
+    prev_effect = row.effect if row else None
     if row:
         row.effect, row.note = req.effect, req.note.strip()
     else:
@@ -390,9 +403,11 @@ def create_grant(req: GrantIn, principal: Principal = Depends(_manage), db=Depen
                               effect=req.effect, note=req.note.strip())
         db.add(row)
     db.commit()
-    audit.record(db, action="access.grant_set", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal),
-                 detail=f"{req.effect} {req.permission} -> {req.subject_type}:{req.subject_id}")
+    audit.record(db, action="access.grant_set", principal=principal,
+                 tenant_id=_tid(principal), target_type=f"grant:{req.subject_type}",
+                 target_id=req.subject_id,
+                 detail=f"{req.effect} {req.permission} -> {req.subject_type}:{req.subject_id}",
+                 changes={f"grant[{req.permission}]": [prev_effect, req.effect]})
     return {"id": row.id, "permission": row.permission, "effect": row.effect}
 
 
@@ -472,13 +487,15 @@ def get_policy(principal: Principal = Depends(_manage)) -> dict:
 def set_policy(req: PolicyIn, principal: Principal = Depends(_manage), db=Depends(get_db)):
     tenant = db.get(Tenant, principal.tenant.id)
     settings = dict(tenant.settings_json or {})
+    prev = bool(settings.get("confidentiality_enforced"))
     settings["confidentiality_enforced"] = bool(req.confidentiality_enforced)
     tenant.settings_json = settings
     db.merge(tenant)
     db.commit()
-    audit.record(db, action="access.policy_changed", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal),
-                 detail=f"confidentiality_enforced={req.confidentiality_enforced}")
+    audit.record(db, action="access.policy_changed", principal=principal,
+                 tenant_id=_tid(principal), target_type="confidentiality_policy",
+                 target_id=_tid(principal),
+                 changes={"confidentiality_enforced": [prev, bool(req.confidentiality_enforced)]})
     return {"confidentiality_enforced": bool(req.confidentiality_enforced)}
 
 
@@ -503,6 +520,8 @@ def get_auth_policy(principal: Principal = Depends(_manage)) -> dict:
 def set_auth_policy(req: AuthPolicyIn, principal: Principal = Depends(_manage), db=Depends(get_db)):
     tenant = db.get(Tenant, _tid(principal))
     st = dict(tenant.settings_json or {})
+    before = {"mfa_required": bool(st.get("mfa_required")),
+              "require_verified_email": bool(st.get("require_verified_email"))}
     if req.mfa_required is not None:
         st["mfa_required"] = bool(req.mfa_required)
     if req.require_verified_email is not None:
@@ -510,8 +529,12 @@ def set_auth_policy(req: AuthPolicyIn, principal: Principal = Depends(_manage), 
     tenant.settings_json = st
     db.merge(tenant)
     db.commit()
-    audit.record(db, action="access.auth_policy_changed", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal), detail=str(req.model_dump()))
+    after = {"mfa_required": bool(st.get("mfa_required")),
+             "require_verified_email": bool(st.get("require_verified_email"))}
+    audit.record(db, action="access.auth_policy_changed", principal=principal,
+                 tenant_id=_tid(principal), target_type="auth_policy",
+                 target_id=_tid(principal), changes=audit.diff(before, after) or None,
+                 detail="" if before != after else "no change")
     return get_auth_policy(principal)
 
 
@@ -545,8 +568,9 @@ def create_api_key(req: ApiKeyIn, principal: Principal = Depends(_manage), db=De
                  key_hash=key_hash, created_by=principal.email, expires_at=expires)
     db.add(row)
     db.commit()
-    audit.record(db, action="access.api_key_created", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal), detail=req.name)
+    audit.record(db, action="access.api_key_created", principal=principal,
+                 tenant_id=_tid(principal), target_type="api_key", target_id=row.id,
+                 detail=req.name)
     return {**_apikey_out(row), "api_key": raw,
             "note": "Copy this key now — it is not shown again."}
 
@@ -558,8 +582,9 @@ def revoke_api_key(key_id: int, principal: Principal = Depends(_manage), db=Depe
         raise HTTPException(404, "API key not found")
     row.revoked = 1
     db.commit()
-    audit.record(db, action="access.api_key_revoked", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=_tid(principal), detail=row.name)
+    audit.record(db, action="access.api_key_revoked", principal=principal,
+                 tenant_id=_tid(principal), target_type="api_key", target_id=key_id,
+                 detail=row.name, changes={"revoked": [False, True]})
     return {"revoked": key_id}
 
 

@@ -2,10 +2,12 @@
 
 ## What it does
 
-Records every security-relevant event on two complementary channels: an
-**audit log** (the tamper-evident compliance record of *effected* changes) and
-the **observability event stream** (the operational feed, including *attempts*
-and denials) that ships to your SIEM.
+Records every security-relevant event on complementary channels: an
+**audit log** (the tamper-evident, hash-chained compliance record of *effected*
+changes — see [Audit log](33-audit-log.md)), the
+**[user activity log](50-user-activity-tracking.md)** (the behavioural stream,
+including reads), and the **observability event stream** (the operational feed,
+including *attempts* and denials) that ships to your SIEM.
 
 ## Channels
 
@@ -30,8 +32,9 @@ the missing `permission`, `role`, `actor`, `tenant`, `route`) + an
 `authz.denied` counter.
 
 **Administration** — `user.*`, `tenant.*`, `access.*` (roles, groups, grants,
-API keys, SSO, auth-policy), connector CRUD + sync, `doc.delete`, settings
-changes.
+API keys, SSO, auth-policy), connector CRUD + sync, `document.uploaded` /
+`document.deleted`, `audit.exported` / `activity.exported`, settings changes.
+Admin rows carry structured `target_type` / `target_id`.
 
 ## Password expiry (opt-in)
 
@@ -60,5 +63,6 @@ existing observability pipeline.
 
 ## Related
 
-[Audit log](33-audit-log.md) · [Observability](41-observability.md) ·
+[Audit log](33-audit-log.md) · [User activity tracking](50-user-activity-tracking.md) ·
+[Observability](41-observability.md) ·
 [Authentication](01-authentication.md) · [Password management](02-password-management.md)

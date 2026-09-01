@@ -13,8 +13,9 @@ import {
   revokeOtherSessions,
   revokeSession,
 } from "@/lib/api/auth";
+import { getMyActivity } from "@/lib/api/me";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import type { AuthSession } from "@/lib/types";
+import type { ActivityEntry, AuthSession } from "@/lib/types";
 import { Card, Empty, Loading, Notice, PageHeader, TableWrap, fmtDate } from "@/components/ui";
 import { IconTrash } from "@/components/icons";
 import { useToast } from "@/components/Toast";
@@ -39,7 +40,59 @@ export default function SecurityPage() {
       <PasswordCard toast={toast} />
       <MfaCard enabled={!!user?.mfa_enabled} toast={toast} onChange={refreshUser} />
       <SessionsCard toast={toast} />
+      <MyActivityCard toast={toast} />
     </>
+  );
+}
+
+function MyActivityCard({ toast }: { toast: Toast }) {
+  const [rows, setRows] = useState<ActivityEntry[] | null>(null);
+
+  useEffect(() => {
+    getMyActivity({ limit: 25 })
+      .then(setRows)
+      .catch((e) => {
+        setRows([]);
+        toast(e.message, "error");
+      });
+  }, [toast]);
+
+  return (
+    <Card title="My recent activity" style={{ marginBottom: 16 }}>
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Everything the platform has recorded about your account — sessions, the documents your
+        questions retrieved, and admin pages you opened.
+      </p>
+      {!rows ? (
+        <Loading />
+      ) : rows.length === 0 ? (
+        <Empty>Nothing recorded yet.</Empty>
+      ) : (
+        <TableWrap
+          head={
+            <>
+              <th>When</th>
+              <th>Action</th>
+              <th>Target</th>
+              <th>IP</th>
+            </>
+          }
+        >
+          {rows.map((r) => (
+            <tr key={r.id}>
+              <td className="small muted" style={{ whiteSpace: "nowrap" }}>
+                {fmtDate(r.created_at)}
+              </td>
+              <td className="small mono">{r.action}</td>
+              <td className="small mono">
+                {r.target_type ? `${r.target_type}${r.target_id ? ` #${r.target_id}` : ""}` : "—"}
+              </td>
+              <td className="small muted mono">{r.ip || "—"}</td>
+            </tr>
+          ))}
+        </TableWrap>
+      )}
+    </Card>
   );
 }
 

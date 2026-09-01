@@ -122,10 +122,9 @@ def create_user(req: UserCreate,
                 force_password_change=1)
     db.add(user)
     db.commit()
-    audit.record(db, action="user.created", actor_email=principal.email,
-                 actor_role=principal.role,
+    audit.record(db, action="user.created", principal=principal,
                  tenant_id=scope.id if scope else None,
-                 detail=f"{email} as {role}")
+                 target_type="user", target_id=user.id, detail=f"{email} as {role}")
     out = _user_out(user)
     if not req.password:
         out["temporary_password"] = password   # shown once, never stored raw
@@ -143,6 +142,9 @@ def update_user(user_id: int, req: UserUpdate,
 
     if principal.user and target.id == principal.user.id and req.is_active is False:
         raise HTTPException(400, "You cannot disable your own account")
+
+    before = {"role": target.role, "full_name": target.full_name,
+              "clearance": target.clearance, "is_active": bool(target.is_active)}
 
     if req.role and req.role != target.role:
         if not _is_super(principal) and req.role not in TENANT_ROLES:
@@ -171,9 +173,12 @@ def update_user(user_id: int, req: UserUpdate,
                 RefreshToken.user_id == target.id).update({"revoked": 1})
 
     db.commit()
-    audit.record(db, action="user.updated", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=target.tenant_id,
-                 detail=f"{target.email}: role={target.role} active={target.is_active}")
+    after = {"role": target.role, "full_name": target.full_name,
+             "clearance": target.clearance, "is_active": bool(target.is_active)}
+    audit.record(db, action="user.updated", principal=principal,
+                 tenant_id=target.tenant_id, target_type="user", target_id=target.id,
+                 detail=target.email,
+                 changes=audit.diff(before, after) or None)
     return _user_out(target)
 
 
@@ -196,8 +201,8 @@ def reset_password(user_id: int,
     db.query(RefreshToken).filter(
         RefreshToken.user_id == target.id).update({"revoked": 1})
     db.commit()
-    audit.record(db, action="user.password_reset", actor_email=principal.email,
-                 actor_role=principal.role, tenant_id=target.tenant_id,
-                 detail=target.email)
+    audit.record(db, action="user.password_reset", principal=principal,
+                 tenant_id=target.tenant_id, target_type="user",
+                 target_id=target.id, detail=target.email)
     return {"temporary_password": temp,
             "note": "Shown once. The user must change it at next sign-in."}

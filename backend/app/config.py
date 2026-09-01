@@ -69,6 +69,19 @@ class Settings(BaseSettings):
     # In-app HTTP→HTTPS redirect. Usually the proxy (Caddy) does this; enable
     # only if the app is directly internet-facing.
     force_https_redirect: bool = False
+    # Trust X-Forwarded-For / X-Real-IP for the client IP recorded in the audit
+    # and activity logs. Safe when the app only ever receives traffic through the
+    # reverse proxy; set false if the app is directly internet-facing.
+    trust_forwarded_for: bool = True
+
+    # ── Governance: audit trail & user activity tracking ───────────
+    # Audit log = the tamper-evident compliance record (hash-chained per
+    # workspace). Activity log = the higher-volume behavioural stream (who
+    # viewed / ran / exported what). See docs/GOVERNANCE.md.
+    audit_retention_days: int = 0        # 0 = keep forever (compliance default)
+    activity_log_enabled: bool = True
+    activity_log_requests: bool = True   # capture every authenticated API call
+    activity_retention_days: int = 90    # trimmed by scripts/purge_logs.py
 
     # ── Transactional email (verification / password reset) ─────────
     email_sender: str = "console"               # console | smtp | noop

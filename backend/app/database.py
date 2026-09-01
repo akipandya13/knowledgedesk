@@ -62,6 +62,11 @@ def confidentiality_level(value: str | None) -> int:
                                       CONFIDENTIALITY_UNKNOWN_LEVEL)
 
 
+TENANT_STATUS_ACTIVE = "active"
+TENANT_STATUS_SUSPENDED = "suspended"
+TENANT_STATUSES = {TENANT_STATUS_ACTIVE, TENANT_STATUS_SUSPENDED}
+
+
 class Tenant(Base):
     __tablename__ = "tenants"
     id = Column(Integer, primary_key=True)
@@ -69,6 +74,12 @@ class Tenant(Base):
     name = Column(String)
     api_key = Column(String, unique=True, index=True)
     settings_json = Column(JSON, default=dict)              # per-tenant overrides (top_k, model, ...)
+    # Lifecycle: 'active' | 'suspended'. A suspended workspace rejects every
+    # request from its users and service keys (superadmin is unaffected) without
+    # losing any data — see app.auth.get_principal.
+    status = Column(String, default=TENANT_STATUS_ACTIVE, index=True)
+    suspended_at = Column(DateTime, nullable=True)
+    suspended_reason = Column(String, default="")
     created_at = Column(DateTime, default=utcnow)
 
     documents = relationship("Document", back_populates="tenant", cascade="all, delete-orphan")
@@ -220,14 +231,60 @@ class RefreshToken(Base):
 
 
 class AuditLog(Base):
+    """Tamper-evident compliance record of *effected* security-relevant changes.
+
+    Rows are append-only and linked into a per-workspace hash chain
+    (``seq`` / ``prev_hash`` / ``entry_hash``, see app.services.audit): altering
+    or deleting any row breaks verification from that point on. ``detail`` and
+    ``meta`` are encrypted at rest; everything used as a filter key stays
+    plaintext.
+    """
     __tablename__ = "audit_log"
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, nullable=True, index=True)  # NULL = platform-level
     actor_email = Column(String, default="")
+    actor_user_id = Column(Integer, nullable=True, index=True)  # stable; email may change
     actor_role = Column(String, default="")
-    action = Column(String, index=True)                  # e.g. auth.login, doc.delete
+    action = Column(String, index=True)                  # e.g. auth.login, document.deleted
+    target_type = Column(String, default="", index=True)  # document | user | role | tenant | …
+    target_id = Column(String, default="", index=True)
     detail = Column(EncryptedText, default="")           # encrypted at rest
-    created_at = Column(DateTime, default=utcnow)
+    meta = Column(EncryptedJSON, default=dict)           # structured extras, encrypted at rest
+    ip = Column(String, default="")
+    user_agent = Column(String, default="")
+    request_id = Column(String, default="", index=True)  # correlate with observability
+    seq = Column(Integer, default=0, index=True)         # per-chain monotonic counter
+    prev_hash = Column(String, default="")
+    entry_hash = Column(String, default="", index=True)
+    created_at = Column(DateTime, default=utcnow, index=True)
+
+
+class ActivityLog(Base):
+    """Behavioural stream — who did what on the platform, including reads.
+
+    Higher volume and lower stakes than the audit log: not hash-chained,
+    retention-bounded (``ACTIVITY_RETENTION_DAYS``, trimmed by
+    scripts/purge_logs.py). Powers the admin activity explorer and the
+    per-user "my activity" view. ``meta`` is encrypted at rest.
+    """
+    __tablename__ = "activity_log"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, index=True)
+    user_id = Column(Integer, nullable=True, index=True)
+    actor_email = Column(String, default="")
+    actor_role = Column(String, default="")
+    action = Column(String, index=True)                  # session.start | document.retrieved | …
+    category = Column(String, default="", index=True)    # read | write | auth | admin | export
+    target_type = Column(String, default="", index=True)
+    target_id = Column(String, default="", index=True)
+    method = Column(String, default="")
+    route = Column(String, default="")
+    status = Column(Integer, default=0)
+    ip = Column(String, default="")
+    user_agent = Column(String, default="")
+    request_id = Column(String, default="", index=True)
+    meta = Column(EncryptedJSON, default=dict)
+    created_at = Column(DateTime, default=utcnow, index=True)
 
 
 class QueryLog(Base):
@@ -451,6 +508,24 @@ def init_db() -> None:
     _add_column_if_missing("refresh_tokens", "label", "label VARCHAR DEFAULT ''")
     _add_column_if_missing("refresh_tokens", "last_used_at", "last_used_at DATETIME")
     _add_column_if_missing("refresh_tokens", "session_started_at", "session_started_at DATETIME")
+    # Governance: structured + tamper-evident audit trail. Existing rows get
+    # seq=0 / empty hashes — verify_chain() treats the first row with a hash as
+    # the chain anchor, so a pre-upgrade history simply isn't chained (and is
+    # reported as such) rather than failing verification.
+    _add_column_if_missing("audit_log", "actor_user_id", "actor_user_id INTEGER")
+    _add_column_if_missing("audit_log", "target_type", "target_type VARCHAR DEFAULT ''")
+    _add_column_if_missing("audit_log", "target_id", "target_id VARCHAR DEFAULT ''")
+    _add_column_if_missing("audit_log", "meta", "meta JSON DEFAULT '{}'")
+    _add_column_if_missing("audit_log", "ip", "ip VARCHAR DEFAULT ''")
+    _add_column_if_missing("audit_log", "user_agent", "user_agent VARCHAR DEFAULT ''")
+    _add_column_if_missing("audit_log", "request_id", "request_id VARCHAR DEFAULT ''")
+    _add_column_if_missing("audit_log", "seq", "seq INTEGER DEFAULT 0")
+    _add_column_if_missing("audit_log", "prev_hash", "prev_hash VARCHAR DEFAULT ''")
+    _add_column_if_missing("audit_log", "entry_hash", "entry_hash VARCHAR DEFAULT ''")
+    # Tenant lifecycle. Existing workspaces are active.
+    _add_column_if_missing("tenants", "status", "status VARCHAR DEFAULT 'active'")
+    _add_column_if_missing("tenants", "suspended_at", "suspended_at DATETIME")
+    _add_column_if_missing("tenants", "suspended_reason", "suspended_reason VARCHAR DEFAULT ''")
 
 
 def new_api_key() -> str:
