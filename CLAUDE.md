@@ -50,7 +50,8 @@ Deep reference already written — **use it, keep it current**:
 
 ```
 backend/app/
-  main.py            app wiring, startup bootstrap, /api/health, /api/demo/seed, SPA fallback
+  main.py            app wiring, startup bootstrap, /livez /readyz /api/health, /api/demo/seed, SPA fallback
+  health.py          liveness / readiness / dependency probes (db·qdrant·llm), health_report
   config.py          Settings (pydantic-settings) — every env var lives here
   database.py        SQLAlchemy models + init_db() migrations + role/scope constants
   rbac.py            Permission constants + ROLE_PERMISSIONS matrix (pure data)
@@ -62,6 +63,7 @@ backend/app/
   request_context.py per-request ip / user-agent / request-id capture (governance)
   activity_middleware.py  one activity_log row per authenticated API call
   logging_setup.py   structured JSON stdlib logging: formatter + correlation filter + WARNING→event bridge
+  observability/resources.py  host/process resource-utilization gauges (psutil), on a timer
   model_catalog.py   model profiles + connector provider field specs (static)
   tenant_settings.py effective_settings / resolve_model_config / embedding_locked
   observability/     signal facade + pluggable sinks (metrics/events/traces/logs; incl. postgres, mongodb)
@@ -280,7 +282,12 @@ monitoring vendor's client into app code — new backends are **sinks**
 [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md)). Every call is a no-op when
 disabled and must never raise into the request path. Audit is the compliance
 record; observability events are the ops stream — they are complementary, keep
-both.
+both. Resource/infra gauges come from `observability/resources.py` (timer, needs
+`psutil`); health/dependency probes from `health.py` — orchestrators use
+`/livez` (liveness, cheap) and `/readyz` (readiness, `503` when a required dep
+is down); a new dependency goes in `health.check_dependencies()` with
+`required=` set (llm is `required=False` — down = extractive fallback, not an
+outage). See [`docs/functionality/37-health-check.md`](docs/functionality/37-health-check.md).
 
 ### Logging
 

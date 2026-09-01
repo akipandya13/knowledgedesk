@@ -180,7 +180,8 @@ class Settings(BaseSettings):
     observability_service_name: str = "knowledgedesk"
     observability_sample_traces: float = 1.0          # 0..1 span sampling
     observability_max_series: int = 2000              # per-metric cardinality cap
-    observability_health_probe_seconds: int = 30      # 0 disables the background probe
+    observability_health_probe_seconds: int = 30      # 0 disables the background dependency probe
+    obs_resource_metrics_seconds: int = 15            # host/process resource-utilization collector; 0 disables
 
     obs_stdout_pretty: bool = False
     obs_stdout_metrics: bool = False                  # metrics are noisy on stdout

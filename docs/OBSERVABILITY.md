@@ -98,6 +98,7 @@ not a single call site.
 | `OBSERVABILITY_SAMPLE_TRACES` | `1.0` | span sampling 0..1 |
 | `OBSERVABILITY_MAX_SERIES` | `2000` | per-metric label-set cap (memory guard) |
 | `OBSERVABILITY_HEALTH_PROBE_SECONDS` | `30` | background dependency probe; `0` disables |
+| `OBS_RESOURCE_METRICS_SECONDS` | `15` | host/process resource-utilization collector; `0` disables |
 | `OBS_STDOUT_PRETTY` / `OBS_STDOUT_METRICS` | `false` | stdout sink options |
 | `OBS_SQLITE_PATH` / `OBS_SQLITE_RETENTION_HOURS` | `{DATA_DIR}/observability.db` / `168` | sqlite sink |
 | `OBS_PROMETHEUS_PATH` / `OBS_PROMETHEUS_TOKEN` | `/metrics` / _(none)_ | Prometheus endpoint |
@@ -129,7 +130,10 @@ not a single call site.
 | Connectors | `connector.syncs{provider,status}` | — | `connector.sync.completed` |
 | Auth | `auth.logins{outcome}`, `auth.refresh.reuse_detected` | — | `auth.login`, `auth.login.failed`, `auth.refresh.reuse_detected` |
 | LLM / embeddings | `llm.calls{provider,outcome}`, `llm.generate.seconds`, `llm.response.chars`, `embedding.calls`, `embedding.batch.seconds`, `embedding.batch.texts` | — | — |
-| Dependencies | `dependency.up{dependency}` (background probe + on `/api/health`) | — | — |
+| Dependencies | `dependency.up{dependency}` (db · qdrant · llm), `dependency.check.seconds{dependency}` (probe latency); background loop + `/readyz` + `/api/health` | — | — |
+| Readiness | `app.ready` (0/1, emitted by `/readyz`) | — | — |
+| Infrastructure / resources | `process.memory.rss.bytes` · `process.memory.vms.bytes` · `process.memory.percent` · `process.cpu.percent` · `process.open_fds` · `process.threads` · `process.uptime.seconds` · `system.cpu.percent` · `system.cpu.count` · `system.memory.percent` · `system.memory.available.bytes` · `system.disk.percent{path}` · `system.disk.free.bytes{path}` · `system.load.average{window}` · `python.gc.objects` · `python.gc.collections{generation}` — refreshed every `OBS_RESOURCE_METRICS_SECONDS` (needs `psutil`; degrades to runtime-only gauges without it) | — | — |
+| Errors | `app.errors{type}` (unhandled), plus `http.server.requests{status_class="5xx"}` for the rate | — | `app.error` |
 | Any span | `span.duration.seconds{span,status}` (so traces yield metrics even with no trace sink) | — | — |
 
 ---

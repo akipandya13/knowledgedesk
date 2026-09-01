@@ -53,6 +53,16 @@ function histQuantile(snap: MetricsSnapshot | null, name: string, q: number, mat
 function ms(v: number | null): string {
   return v == null ? "—" : v < 1 ? `${Math.round(v * 1000)} ms` : `${v.toFixed(2)} s`;
 }
+function mb(v: number | null): string {
+  return v == null ? "—" : `${(v / (1024 * 1024)).toFixed(0)} MB`;
+}
+function pct(v: number | null): string {
+  return v == null ? "—" : `${v.toFixed(0)}%`;
+}
+function gaugeAny(snap: MetricsSnapshot | null, name: string): number | null {
+  const s = metric(snap, name)?.series[0];
+  return s ? (s.value ?? null) : null;
+}
 
 export default function ObservabilityPage() {
   const { toast } = useToast();
@@ -93,10 +103,23 @@ export default function ObservabilityPage() {
       notFoundPct: answers ? (notFound / answers) * 100 : 0,
       ingested: sumCounter(snap, "ingest.documents", (l) => l.outcome === "ready"),
       ingestFailed: sumCounter(snap, "ingest.documents", (l) => l.outcome === "failed"),
+      db: gaugeVal(snap, "dependency.up", (l) => l.dependency === "db"),
       qdrant: gaugeVal(snap, "dependency.up", (l) => l.dependency === "qdrant"),
       llm: gaugeVal(snap, "dependency.up", (l) => l.dependency === "llm"),
+      ready: gaugeAny(snap, "app.ready"),
     };
   }, [snap]);
+
+  const res = useMemo(() => ({
+    rss: gaugeAny(snap, "process.memory.rss.bytes"),
+    procCpu: gaugeAny(snap, "process.cpu.percent"),
+    fds: gaugeAny(snap, "process.open_fds"),
+    threads: gaugeAny(snap, "process.threads"),
+    sysMem: gaugeAny(snap, "system.memory.percent"),
+    sysCpu: gaugeAny(snap, "system.cpu.percent"),
+    disk: gaugeVal(snap, "system.disk.percent", () => true),
+  }), [snap]);
+  const hasResources = res.rss != null || res.threads != null;
 
   const stageRows = useMemo(() => {
     const m = metric(snap, "rag.stage.seconds");
@@ -165,6 +188,37 @@ export default function ObservabilityPage() {
         <StatCard value={derived.qdrant == null ? "—" : derived.qdrant ? "up" : "down"} label="Qdrant" />
         <StatCard value={derived.llm == null ? "—" : derived.llm ? "up" : "down"} label="LLM backend" />
       </div>
+
+      <Card title="Health" style={{ marginTop: 16 }}>
+        <div className="chips">
+          <span className="chip" style={{ cursor: "default", color: derived.ready ? "var(--green)" : derived.ready === 0 ? "var(--red)" : undefined }}>
+            readiness · {derived.ready == null ? "unknown" : derived.ready ? "ready" : "not ready"}
+          </span>
+          {([["db", derived.db], ["qdrant", derived.qdrant], ["llm", derived.llm]] as const).map(([name, up]) => (
+            <span key={name} className="chip" style={{ cursor: "default", color: up ? "var(--green)" : up === 0 ? "var(--red)" : undefined }}>
+              {name} · {up == null ? "—" : up ? "up" : "down"}
+            </span>
+          ))}
+        </div>
+        <p className="small muted" style={{ marginTop: 8, marginBottom: 0 }}>
+          Probes: <span className="mono">/livez</span> (liveness) · <span className="mono">/readyz</span> (readiness, 503 when a required dependency is down) · <span className="mono">/api/health</span> (detailed).
+        </p>
+      </Card>
+
+      {hasResources && (
+        <>
+          <h3 style={{ margin: "20px 0 10px" }}>Resource utilization</h3>
+          <div className="stat-grid">
+            <StatCard value={mb(res.rss)} label="Process memory (RSS)" />
+            <StatCard value={pct(res.procCpu)} label="Process CPU" />
+            <StatCard value={res.threads ?? "—"} label="Threads" />
+            <StatCard value={res.fds ?? "—"} label="Open file descriptors" />
+            <StatCard value={pct(res.sysCpu)} label="Host CPU" />
+            <StatCard value={pct(res.sysMem)} label="Host memory" />
+            <StatCard value={pct(res.disk)} label="Disk (data dir)" />
+          </div>
+        </>
+      )}
 
       <div className="two-col" style={{ marginTop: 16 }}>
         <Card title="RAG stage latency (avg)">

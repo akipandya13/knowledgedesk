@@ -18,8 +18,10 @@ from .auth import get_db, tenant_ctx
 from .config import get_settings
 from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
                        init_db)
+from . import health
 from .observability import context as obs_ctx
 from .observability.middleware import ObservabilityMiddleware
+from .observability.resources import resource_metrics_loop
 from .activity_middleware import ActivityMiddleware
 from .logging_setup import configure_logging
 from .request_context import RequestContextMiddleware
@@ -27,7 +29,6 @@ from .rbac import Permission
 from .secret_resolver import available_providers, resolve_secret
 from .routers import access, admin, connectors, documents, query, sso
 from .routers import auth_routes, me as me_router, observability as observability_router, users as users_router
-from .services import llm, vectorstore
 from .services.ingestion import ingest_document
 from . import security
 from .model_catalog import HEAVY_LOCAL_MODELS, LARGE_OLLAMA_MODELS, SAFE_DEMO_OLLAMA_MODELS, profile_defaults
@@ -237,33 +238,23 @@ def _enforce_safe_model_defaults(db) -> None:
 
 
 _health_task: asyncio.Task | None = None
+_resource_task: asyncio.Task | None = None
 
 
 async def _health_probe_loop(period: int) -> None:
-    """Refresh dependency-up gauges on a timer so monitoring sees outages even
-    when no one is using the app."""
+    """Refresh dependency-up gauges + check latency on a timer so monitoring
+    sees outages even when no one is using the app."""
     while True:
         try:
-            await _record_health()
+            await health.check_dependencies()
         except Exception:                       # never let the probe die
             log.exception("observability health probe failed")
         await asyncio.sleep(period)
 
 
-async def _record_health() -> dict:
-    qdrant_ok = vectorstore.healthy()
-    llm_state = ("ok" if await llm.is_available()
-                 else ("disabled" if settings.llm_provider == "none" else "down"))
-    obs.gauge("dependency.up", 1 if qdrant_ok else 0, dependency="qdrant",
-              help="1 = dependency reachable")
-    obs.gauge("dependency.up", 1 if llm_state == "ok" else 0, dependency="llm",
-              provider=settings.llm_provider)
-    return {"qdrant": "ok" if qdrant_ok else "down", "llm": llm_state}
-
-
 @app.on_event("startup")
 def startup() -> None:
-    global _health_task
+    global _health_task, _resource_task
     # Re-apply after uvicorn installs its own logging config (which happens
     # after this module is imported) — last configuration wins.
     configure_logging(settings)
@@ -274,12 +265,18 @@ def startup() -> None:
         _enforce_safe_model_defaults(db)
     finally:
         db.close()
-    period = settings.observability_health_probe_seconds
-    if obs.is_enabled() and period > 0:
+    if obs.is_enabled():
         try:
-            _health_task = asyncio.get_running_loop().create_task(_health_probe_loop(period))
+            loop = asyncio.get_running_loop()
+            period = settings.observability_health_probe_seconds
+            if period > 0:
+                _health_task = loop.create_task(_health_probe_loop(period))
+            rperiod = settings.obs_resource_metrics_seconds
+            if rperiod > 0:
+                _resource_task = loop.create_task(resource_metrics_loop(rperiod))
         except RuntimeError:
-            log.warning("observability: no running loop at startup; health probe disabled")
+            log.warning("observability: no running loop at startup; background probes disabled")
+    health.mark_ready()
     log.info("%s ready — LLM=%s/%s, embeddings=%s | secret providers: %s",
              settings.app_name, settings.llm_provider, settings.llm_model,
              settings.embedding_provider, ", ".join(available_providers()))
@@ -287,22 +284,33 @@ def startup() -> None:
 
 @app.on_event("shutdown")
 def shutdown() -> None:
-    if _health_task:
-        _health_task.cancel()
+    for task in (_health_task, _resource_task):
+        if task:
+            task.cancel()
     obs.shutdown()
 
 
-@app.get("/api/health")
-async def health():
-    dep = await _record_health()
-    return {
-        "app": "ok",
-        "qdrant": dep["qdrant"],
-        "llm": dep["llm"],
-        "llm_provider": settings.llm_provider,
-        "llm_model": settings.llm_model,
-        "environment": settings.environment,
-    }
+# ── Health / liveness / readiness probes ─────────────────────────────
+# Split the way an orchestrator expects. /livez is cheap (no I/O); /readyz
+# gates traffic on required dependencies + startup bootstrap; /api/health is
+# the detailed dashboard view. See docs/functionality/37-health-check.md.
+@app.get("/livez", tags=["health"])
+@app.get("/healthz", include_in_schema=False)
+def livez():
+    return health.liveness()
+
+
+@app.get("/readyz", tags=["health"])
+async def readyz():
+    ready, payload = await health.readiness()
+    if not ready:
+        return JSONResponse(status_code=503, content=payload)
+    return payload
+
+
+@app.get("/api/health", tags=["health"])
+async def api_health():
+    return await health.health_report()
 
 
 @app.post("/api/demo/seed")

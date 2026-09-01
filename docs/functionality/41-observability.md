@@ -29,8 +29,13 @@ backend) is chosen by configuration, with no vendor as a hard dependency.
 - **Automatic correlation** — the HTTP middleware assigns `X-Request-ID` and
   binds `route`; `get_principal` binds `tenant` + `actor`; events and spans pick
   these up.
-- **Instrumented**: HTTP layer, RAG pipeline stages, ingestion stages,
-  connectors, auth, LLM/embedding backends, dependency health (background probe).
+- **Instrumented**: HTTP layer (request rate / latency / error rate / in-flight),
+  RAG pipeline stages, ingestion stages, connectors, auth, LLM/embedding
+  backends, unhandled errors (`app.errors`), **infrastructure / resource
+  utilization** (`process.*` / `system.*` CPU, memory, FDs, threads, disk —
+  `app/observability/resources.py`, needs `psutil`), and **dependency health**
+  (`db` · `qdrant` · `llm`, with probe latency) via a background probe,
+  `/readyz` and `/api/health`. See [Health checks](37-health-check.md).
 
 ## Interfaces
 

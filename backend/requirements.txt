@@ -20,6 +20,7 @@ pyotp==2.9.0
 cryptography==44.0.0
 boto3==1.35.90
 google-auth==2.38.0
+psutil==6.1.0                # host/process resource-utilization metrics (app/observability/resources.py)
 
 # Optional centralized-log-collection sinks (app/observability/sinks/).
 # Only imported if a deployment actually selects "postgres" / "mongodb" in
