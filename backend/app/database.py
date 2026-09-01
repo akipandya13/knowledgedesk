@@ -8,7 +8,7 @@ import secrets
 import datetime as dt
 
 from sqlalchemy import (create_engine, Column, Integer, String, Float, Text,
-                        DateTime, ForeignKey, JSON, Boolean)
+                        DateTime, ForeignKey, JSON, Boolean, UniqueConstraint)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 from .config import get_settings
@@ -36,6 +36,29 @@ def utcnow() -> dt.datetime:
 DOC_SCOPE_TENANT = "tenant"
 DOC_SCOPE_WORKSPACE = "workspace"
 DOC_SCOPES = {DOC_SCOPE_TENANT, DOC_SCOPE_WORKSPACE}
+
+# ── Fine-grained access primitives (see app.authz) ──────────────────
+SUBJECT_USER = "user"
+SUBJECT_GROUP = "group"
+GRANT_ALLOW = "allow"
+GRANT_DENY = "deny"
+
+# Ordered sensitivity of the document `confidentiality` field. A user may see a
+# document only if its level <= their clearance, when the tenant opts in to
+# enforcement. Unknown values are treated as most sensitive.
+CONFIDENTIALITY_LEVELS = {
+    "public": 10,
+    "internal": 20,
+    "confidential": 30,
+    "restricted": 40,
+}
+CONFIDENTIALITY_UNKNOWN_LEVEL = 99
+DEFAULT_CLEARANCE = 100          # sees everything; existing users keep this
+
+
+def confidentiality_level(value: str | None) -> int:
+    return CONFIDENTIALITY_LEVELS.get((value or "internal").lower(),
+                                      CONFIDENTIALITY_UNKNOWN_LEVEL)
 
 
 class Tenant(Base):
@@ -168,6 +191,12 @@ class User(Base):
     failed_logins = Column(Integer, default=0)
     locked_until = Column(DateTime, nullable=True)
     last_login_at = Column(DateTime, nullable=True)
+    clearance = Column(Integer, default=DEFAULT_CLEARANCE)  # ABAC: max confidentiality level
+    email_verified = Column(Integer, default=1)          # existing/admin-made accounts trusted
+    mfa_enabled = Column(Integer, default=0)
+    mfa_secret_encrypted = Column(Text, default="")      # Fernet {"totp": <base32>}
+    mfa_recovery_hashes = Column(JSON, default=list)     # sha256 of one-time recovery codes
+    auth_provider = Column(String, default="password")   # password | sso
     created_at = Column(DateTime, default=utcnow)
 
     tenant = relationship("Tenant")
@@ -180,6 +209,10 @@ class RefreshToken(Base):
     token_hash = Column(String, unique=True, index=True)  # SHA-256, never raw
     expires_at = Column(DateTime)
     revoked = Column(Integer, default=0)
+    user_agent = Column(String, default="")             # session metadata
+    ip = Column(String, default="")
+    label = Column(String, default="")
+    last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=utcnow)
 
 
@@ -211,6 +244,167 @@ class QueryLog(Base):
     created_at = Column(DateTime, default=utcnow)
 
 
+# ── Fine-grained access model ──────────────────────────────────────
+# Layered on top of the built-in RBAC matrix (app.rbac). Everything below is
+# tenant-scoped. A user with no custom role, grant or group behaves exactly as
+# their built-in role — this model is inert until an admin uses it.
+
+class Role(Base):
+    """A tenant-defined role: a named bundle of permissions."""
+    __tablename__ = "roles"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    key = Column(String, nullable=False)                 # slug, unique per tenant
+    name = Column(String, default="")
+    description = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (UniqueConstraint("tenant_id", "key", name="uq_role_tenant_key"),)
+
+    permissions = relationship("RolePermission", cascade="all, delete-orphan",
+                               backref="role")
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+    id = Column(Integer, primary_key=True)
+    role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
+    permission = Column(String, nullable=False)
+    __table_args__ = (UniqueConstraint("role_id", "permission", name="uq_role_permission"),)
+
+
+class Group(Base):
+    """A named set of users. Roles / grants assigned to a group apply to members."""
+    __tablename__ = "groups"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_group_tenant_name"),)
+
+    members = relationship("GroupMember", cascade="all, delete-orphan", backref="group")
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+    id = Column(Integer, primary_key=True)
+    group_id = Column(Integer, ForeignKey("groups.id"), index=True, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    __table_args__ = (UniqueConstraint("group_id", "user_id", name="uq_group_member"),)
+
+
+class PrincipalRole(Base):
+    """Assigns a custom Role to a subject (a user or a group)."""
+    __tablename__ = "principal_roles"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    subject_type = Column(String, nullable=False)        # user | group
+    subject_id = Column(Integer, nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (UniqueConstraint("subject_type", "subject_id", "role_id",
+                                       name="uq_principal_role"),)
+
+
+class PermissionGrant(Base):
+    """A direct allow/deny override for a subject. deny always wins."""
+    __tablename__ = "permission_grants"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    subject_type = Column(String, nullable=False)        # user | group
+    subject_id = Column(Integer, nullable=False)
+    permission = Column(String, nullable=False)
+    effect = Column(String, default=GRANT_ALLOW)         # allow | deny
+    note = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (UniqueConstraint("subject_type", "subject_id", "permission",
+                                       name="uq_permission_grant"),)
+
+
+class ResourceGrant(Base):
+    """Per-object ACL: <subject> may <permission> on <resource_type:resource_id>.
+    Additive only (no deny) and overrides ownership / clearance for that object."""
+    __tablename__ = "resource_grants"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    subject_type = Column(String, nullable=False)        # user | group
+    subject_id = Column(Integer, nullable=False)
+    resource_type = Column(String, nullable=False)       # document | collection
+    resource_id = Column(String, nullable=False)         # string for future-proofing
+    permission = Column(String, nullable=False)
+    granted_by = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+    __table_args__ = (UniqueConstraint("subject_type", "subject_id", "resource_type",
+                                       "resource_id", "permission",
+                                       name="uq_resource_grant"),)
+
+
+# ── Authentication: API keys, password history, email tokens, SSO ───
+
+class ApiKey(Base):
+    """A named, hashed, optionally-expiring API key for a workspace. Replaces the
+    single plaintext ``Tenant.api_key`` (which still works for back-compat)."""
+    __tablename__ = "api_keys"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True, nullable=False)
+    name = Column(String, default="")
+    prefix = Column(String, index=True)                  # first chars, for display
+    key_hash = Column(String, unique=True, index=True)   # sha256 of the full key
+    created_by = Column(String, default="")
+    expires_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked = Column(Integer, default=0)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class PasswordHistory(Base):
+    __tablename__ = "password_history"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class AuthToken(Base):
+    """Single-use, hashed, time-boxed token emailed to a user."""
+    __tablename__ = "auth_tokens"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    purpose = Column(String, nullable=False)             # verify_email | reset_password
+    token_hash = Column(String, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+
+class SsoConnection(Base):
+    """Per-tenant OIDC identity provider (the 'sso' entitlement). Generic OIDC —
+    works with Google, Okta, Microsoft Entra, Auth0, Keycloak, …"""
+    __tablename__ = "sso_connections"
+    id = Column(Integer, primary_key=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), unique=True, index=True, nullable=False)
+    display_name = Column(String, default="SSO")
+    issuer = Column(String, default="")                  # OIDC issuer URL (discovery)
+    client_id = Column(String, default="")
+    secret_encrypted = Column(Text, default="")          # Fernet {"client_secret": ...}
+    allowed_domains = Column(JSON, default=list)         # email domains eligible for JIT
+    default_role = Column(String, default="member")
+    is_active = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class SsoState(Base):
+    """Short-lived OIDC authorization-flow state (CSRF token + PKCE verifier)."""
+    __tablename__ = "sso_states"
+    id = Column(Integer, primary_key=True)
+    state = Column(String, unique=True, index=True)
+    tenant_id = Column(Integer, index=True)
+    code_verifier = Column(String, default="")
+    redirect_uri = Column(String, default="")
+    created_at = Column(DateTime, default=utcnow)
+
+
 def _add_column_if_missing(table: str, column: str, ddl: str) -> None:
     """Tiny SQLite migration helper so demo volumes survive v1 upgrades."""
     with engine.begin() as conn:
@@ -239,6 +433,18 @@ def init_db() -> None:
     _add_column_if_missing("query_log", "filters_json", "filters_json JSON DEFAULT '{}'")
     _add_column_if_missing("query_log", "cost_estimate_usd", "cost_estimate_usd FLOAT DEFAULT 0.0")
     _add_column_if_missing("query_log", "user_id", "user_id INTEGER")
+    # Fine-grained access: per-user clearance for confidentiality (ABAC).
+    _add_column_if_missing("users", "clearance", f"clearance INTEGER DEFAULT {DEFAULT_CLEARANCE}")
+    # Authentication hardening
+    _add_column_if_missing("users", "email_verified", "email_verified INTEGER DEFAULT 1")
+    _add_column_if_missing("users", "mfa_enabled", "mfa_enabled INTEGER DEFAULT 0")
+    _add_column_if_missing("users", "mfa_secret_encrypted", "mfa_secret_encrypted TEXT DEFAULT ''")
+    _add_column_if_missing("users", "mfa_recovery_hashes", "mfa_recovery_hashes JSON DEFAULT '[]'")
+    _add_column_if_missing("users", "auth_provider", "auth_provider VARCHAR DEFAULT 'password'")
+    _add_column_if_missing("refresh_tokens", "user_agent", "user_agent VARCHAR DEFAULT ''")
+    _add_column_if_missing("refresh_tokens", "ip", "ip VARCHAR DEFAULT ''")
+    _add_column_if_missing("refresh_tokens", "label", "label VARCHAR DEFAULT ''")
+    _add_column_if_missing("refresh_tokens", "last_used_at", "last_used_at DATETIME")
 
 
 def new_api_key() -> str:

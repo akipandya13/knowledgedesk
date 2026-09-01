@@ -3,9 +3,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth/AuthProvider";
-import { can } from "@/lib/auth/permissions";
 import { ROLE_HOME } from "@/lib/config";
-import type { CurrentUser, Permission } from "@/lib/types";
+import type { Permission } from "@/lib/types";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 import { Loading } from "@/components/ui";
@@ -24,26 +23,28 @@ const ROUTE_PERMISSION: { prefix: string; perm: Permission }[] = [
   { prefix: "/model-connectors", perm: "model_connector.manage" },
   { prefix: "/settings", perm: "settings.write" },
   { prefix: "/observability", perm: "observability.read" },
+  { prefix: "/access", perm: "access.manage" },
   { prefix: "/platform", perm: "platform.read" },
 ];
 
-const ALWAYS_ALLOWED = ["/change-password"];
+const ALWAYS_ALLOWED = ["/change-password", "/security"];
 
-function allowed(pathname: string, user: CurrentUser): boolean {
-  if (ALWAYS_ALLOWED.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
-    return true;
-  }
-  const match = ROUTE_PERMISSION.find(
-    ({ prefix }) => pathname === prefix || pathname.startsWith(prefix + "/"),
-  );
-  return match ? can(user, match.perm) : false;
+function makeAllowed(has: (p: Permission) => boolean) {
+  return (pathname: string): boolean => {
+    if (ALWAYS_ALLOWED.some((p) => pathname === p || pathname.startsWith(p + "/"))) return true;
+    const match = ROUTE_PERMISSION.find(
+      ({ prefix }) => pathname === prefix || pathname.startsWith(prefix + "/"),
+    );
+    return match ? has(match.perm) : false;
+  };
 }
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, hasPermission } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const [navOpen, setNavOpen] = useState(false);
+  const allowed = makeAllowed(hasPermission);
 
   useEffect(() => {
     if (loading) return;
@@ -56,14 +57,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       router.replace("/change-password");
       return;
     }
-    if (!allowed(pathname, user)) {
+    if (!allowed(pathname)) {
       router.replace(ROLE_HOME[user.role] || "/ask");
     }
-  }, [user, loading, pathname, router]);
+  }, [user, loading, pathname, router, hasPermission]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => setNavOpen(false), [pathname]);
 
-  if (loading || !user || user.force_password_change || !allowed(pathname, user)) {
+  if (loading || !user || user.force_password_change || !allowed(pathname)) {
     return <Loading label="Loading workspace…" />;
   }
 

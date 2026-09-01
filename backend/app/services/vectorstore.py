@@ -88,19 +88,25 @@ def upsert_chunks(tenant_slug: str, doc_id: int, filename: str,
                         points=points[i:i + 256])
 
 
-def _access_condition(access: dict | None):
-    """A single OR-condition restricting hits to what the caller may read.
+def _access_conditions(access: dict | None) -> list:
+    """MUST-clauses restricting hits to what the caller may read. Each is an
+    OR-group; together they AND. Enforced server-side — a request cannot widen it.
 
-    ``access`` = {"user_id": int|None, "scope": "workspace"|"company"|"all"}.
-    The result is enforced server-side and cannot be widened by the request.
+    ``access`` = {
+        user_id, scope,                         # identity + workspace|company|all
+        granted_doc_ids: [int],                 # docs explicitly shared with the caller
+        allowed_confidentialities: [str] | None  # ABAC clearance; None = unrestricted
+    }
 
     Points written before the ownership model have no ``scope`` payload key; an
     ``IsEmpty`` clause treats those as company-wide so nothing 404s mid-migration.
     """
     if not access:
-        return None
+        return []
     uid = access.get("user_id")
     want = (access.get("scope") or "all").lower()
+    granted = [int(x) for x in (access.get("granted_doc_ids") or [])]
+    allowed_conf = access.get("allowed_confidentialities")
 
     company = [
         FieldCondition(key="scope", match=MatchValue(value="tenant")),
@@ -108,14 +114,23 @@ def _access_condition(access: dict | None):
     ]
     mine = ([FieldCondition(key="owner_user_id", match=MatchValue(value=uid))]
             if uid is not None else [])
+    shared = [FieldCondition(key="doc_id", match=MatchAny(any=granted))] if granted else []
 
     if want == "company":
-        should = company
+        visibility = company + shared
     elif want == "workspace":
-        should = mine or company        # a service key with no user falls back to company docs
-    else:                               # "all" — everything the caller can see
-        should = company + mine
-    return Filter(should=should)
+        visibility = (mine + shared) or company
+    else:                                # "all"
+        visibility = company + mine + shared
+
+    conds = [Filter(should=visibility)]
+
+    # ABAC: clearance. Own / shared documents bypass it.
+    if allowed_conf is not None:
+        conf_ok = [FieldCondition(key="confidentiality", match=MatchAny(any=list(allowed_conf)))]
+        conds.append(Filter(should=conf_ok + mine + shared))
+
+    return conds
 
 
 def _query_filter(filters: dict | None, access: dict | None) -> Filter | None:
@@ -131,9 +146,7 @@ def _query_filter(filters: dict | None, access: dict | None) -> Filter | None:
             must.append(FieldCondition(key="department", match=MatchValue(value=filters["department"])))
         if filters.get("confidentiality"):
             must.append(FieldCondition(key="confidentiality", match=MatchValue(value=filters["confidentiality"])))
-    access_cond = _access_condition(access)
-    if access_cond is not None:
-        must.append(access_cond)
+    must.extend(_access_conditions(access))
     return Filter(must=must) if must else None
 
 

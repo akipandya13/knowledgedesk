@@ -30,11 +30,11 @@ from dataclasses import dataclass
 from fastapi import Depends, Header, HTTPException
 
 from .config import get_settings
-from .database import (ROLE_SERVICE, ROLE_SUPERADMIN, SessionLocal, Tenant,
-                       User)
+from .database import (ApiKey, ROLE_SERVICE, ROLE_SUPERADMIN, SessionLocal,
+                       Tenant, User, utcnow)
 from .rbac import (Permission, WORKSPACE_PERMISSIONS, has_permission,
                    missing_permissions)
-from .security import decode_access_token
+from .security import decode_access_token, hash_api_key
 
 
 def get_db():
@@ -50,6 +50,10 @@ class Principal:
     role: str
     user: User | None = None             # None for service (API key) principals
     tenant: Tenant | None = None         # None for superadmin
+    # Effective permission set: built-in role ∪ custom roles ∪ grants − denies.
+    # Resolved once per request in get_principal; falls back to the built-in
+    # matrix for principals created outside a request.
+    perms: frozenset[str] = frozenset()
 
     @property
     def email(self) -> str:
@@ -60,6 +64,8 @@ class Principal:
         return self.user.id if self.user else None
 
     def can(self, permission: str) -> bool:
+        if self.perms:
+            return permission in self.perms
         return has_permission(self.role, permission)
 
 
@@ -80,22 +86,56 @@ def get_principal(authorization: str = Header(default=""),
         tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
         if user.role != ROLE_SUPERADMIN and not tenant:
             raise HTTPException(401, "Account is not attached to a workspace")
-        principal = Principal(role=user.role, user=user, tenant=tenant)
+        principal = Principal(role=user.role, user=user, tenant=tenant,
+                              perms=_resolve_perms(db, user.role, user))
         _bind_observability(principal)
         return principal
 
-    # Door 2: tenant service key. X-API-Key is canonical; X-Tenant-Key is
-    # accepted for backwards-compatible demo scripts and earlier README examples.
-    service_key = x_api_key or x_tenant_key
+    # Door 2: tenant service key. Prefer the hashed, revocable ApiKey table;
+    # fall back to the legacy single plaintext Tenant.api_key.
+    service_key = (x_api_key or x_tenant_key).strip()
     if service_key:
-        tenant = db.query(Tenant).filter(Tenant.api_key == service_key).first()
+        tenant = _resolve_api_key(db, service_key)
         if not tenant:
-            raise HTTPException(401, "Invalid API key")
-        principal = Principal(role=ROLE_SERVICE, tenant=tenant)
+            raise HTTPException(401, "Invalid or expired API key")
+        principal = Principal(role=ROLE_SERVICE, tenant=tenant,
+                              perms=_resolve_perms(db, ROLE_SERVICE, None))
         _bind_observability(principal)
         return principal
 
     raise HTTPException(401, "Not authenticated")
+
+
+def _resolve_api_key(db, raw: str) -> Tenant | None:
+    row = (db.query(ApiKey)
+           .filter(ApiKey.key_hash == hash_api_key(raw), ApiKey.revoked == 0)
+           .first())
+    if row:
+        if row.expires_at:
+            exp = row.expires_at
+            if exp.tzinfo is None:
+                import datetime as _dt
+                exp = exp.replace(tzinfo=_dt.timezone.utc)
+            import datetime as _dt
+            if exp < _dt.datetime.now(_dt.timezone.utc):
+                return None
+        row.last_used_at = utcnow()
+        db.commit()
+        return db.get(Tenant, row.tenant_id)
+    return db.query(Tenant).filter(Tenant.api_key == raw).first()  # legacy
+
+
+def _resolve_perms(db, role: str, user) -> frozenset[str]:
+    """Effective permission set. Isolated so a resolution bug degrades to the
+    built-in matrix rather than 500-ing every request."""
+    try:
+        from .authz import effective_permissions
+        return effective_permissions(db, role, user)
+    except Exception:                       # pragma: no cover — defensive
+        import logging
+        logging.getLogger("knowledgedesk.auth").exception("perm resolution failed")
+        from .rbac import ROLE_PERMISSIONS
+        return frozenset(ROLE_PERMISSIONS.get(role, frozenset()))
 
 
 def _bind_observability(principal: "Principal") -> None:
@@ -123,7 +163,9 @@ def require(*permissions: str, tenant_required: bool = True):
         raise ValueError("require() needs at least one permission")
 
     def guard(principal: Principal = Depends(get_principal)) -> Principal:
-        missing = missing_permissions(principal.role, needed)
+        # principal.perms already folds in custom roles, grants and denies.
+        held = principal.perms or frozenset()
+        missing = needed - held if held else missing_permissions(principal.role, needed)
         if missing:
             if principal.role == ROLE_SUPERADMIN and needed <= WORKSPACE_PERMISSIONS:
                 raise HTTPException(
@@ -183,7 +225,9 @@ def get_tenant_admin(principal: Principal = Depends(require_tenant_admin)) -> Te
 def require_admin(x_admin_key: str = Header(default=""),
                   authorization: str = Header(default=""),
                   db=Depends(get_db)) -> None:
-    if x_admin_key and x_admin_key == get_settings().admin_api_key:
+    s = get_settings()
+    if (s.auth_legacy_admin_key_enabled and x_admin_key
+            and x_admin_key == s.admin_api_key):
         return
     if authorization.startswith("Bearer "):
         payload = decode_access_token(authorization[7:].strip())

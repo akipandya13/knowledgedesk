@@ -1,5 +1,10 @@
 # Password management
 
+> Now also: **self-service forgot/reset** (`/api/auth/password/{forgot,reset}`,
+> emailed 1-hour link), **reuse history** (`AUTH_PW_HISTORY`), optional
+> **character-class rules** (`AUTH_PW_REQUIRE_*`) and an optional **Have I Been
+> Pwned** breach check (`AUTH_PW_BREACH_CHECK`). See [`../AUTHENTICATION.md`](../AUTHENTICATION.md) §3.
+
 ## What it does
 
 Lets users change their own password, lets admins reset someone else's, enforces

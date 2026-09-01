@@ -1,5 +1,11 @@
 # Authentication
 
+> Extended since first written: **TOTP MFA** ([43](43-multi-factor-authentication.md)),
+> **SSO/OIDC** ([44](44-single-sign-on.md)), **session + API-key management**
+> ([45](45-session-and-api-key-management.md)), login rate-limiting, self-service
+> password reset, email verification and a configurable password policy. Full
+> reference: [`../AUTHENTICATION.md`](../AUTHENTICATION.md).
+
 ## What it does
 
 Signs human users in and keeps them signed in, without ever storing a plaintext

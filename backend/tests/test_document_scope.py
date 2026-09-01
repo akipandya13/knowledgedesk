@@ -142,4 +142,7 @@ def test_ask_passes_caller_identity_into_retrieval(client, make_world, monkeypat
     r = client.post("/api/query/ask", headers=w["alice"],
                     json={"question": "what is the pto policy", "scope": "workspace"})
     assert r.status_code == 200
-    assert seen["access"] == {"user_id": w["ids"]["alice"], "scope": "workspace"}
+    assert seen["access"]["user_id"] == w["ids"]["alice"]
+    assert seen["access"]["scope"] == "workspace"
+    assert seen["access"]["granted_doc_ids"] == []          # no resource grants
+    assert seen["access"]["allowed_confidentialities"] is None  # policy off by default

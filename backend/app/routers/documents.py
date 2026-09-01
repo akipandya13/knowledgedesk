@@ -21,6 +21,7 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form,
                      HTTPException, UploadFile)
 from sqlalchemy import and_, or_
 
+from .. import authz
 from ..auth import Principal, get_db, require
 from ..database import (DOC_SCOPE_TENANT, DOC_SCOPE_WORKSPACE, Document, User)
 from ..rbac import Permission
@@ -162,17 +163,31 @@ def list_documents(status: str | None = None, source: str | None = None,
     q = db.query(Document).filter(Document.tenant_id == tenant.id,
                                   Document.is_active == True)  # noqa: E712
 
+    # Documents explicitly shared with this caller (or a group) via a per-object
+    # ACL — visible regardless of scope / ownership / clearance.
+    shared_ids = {int(x) for x in
+                  authz.granted_resource_ids(db, principal, "document", Permission.DOC_READ)
+                  if str(x).isdigit()}
+
     # Visibility: admins see everything in the workspace; members see company-wide
-    # documents plus their own. The `scope` param only narrows that.
+    # documents plus their own plus anything shared with them. `scope` narrows.
     if not is_admin:
         uid = principal.user_id
         mine = and_(Document.scope == DOC_SCOPE_WORKSPACE, Document.owner_user_id == uid)
+        shared = Document.id.in_(shared_ids) if shared_ids else False
         if scope == "company":
-            q = q.filter(Document.scope == DOC_SCOPE_TENANT)
+            q = q.filter(or_(Document.scope == DOC_SCOPE_TENANT, shared))
         elif scope == "workspace":
-            q = q.filter(mine)
+            q = q.filter(or_(mine, shared))
         else:
-            q = q.filter(or_(Document.scope == DOC_SCOPE_TENANT, mine))
+            q = q.filter(or_(Document.scope == DOC_SCOPE_TENANT, mine, shared))
+
+        # ABAC: confidentiality clearance (opt-in per tenant). Own / shared docs
+        # bypass the clearance check.
+        allowed = authz.allowed_confidentialities(
+            principal.user, authz.confidentiality_enforced(tenant))
+        if allowed is not None:
+            q = q.filter(or_(Document.confidentiality.in_(allowed), mine, shared))
     else:
         if scope == "company":
             q = q.filter(Document.scope == DOC_SCOPE_TENANT)
@@ -214,7 +229,8 @@ def delete_document(doc_id: int,
     owns_it = (doc.scope == DOC_SCOPE_WORKSPACE
                and doc.owner_user_id is not None
                and doc.owner_user_id == principal.user_id)
-    if not (is_admin or owns_it):
+    granted = authz.can_on(db, principal, Permission.DOC_DELETE, "document", doc.id)
+    if not (is_admin or owns_it or granted):
         raise HTTPException(403, "You can only delete documents in your own workspace")
 
     vectorstore.delete_document(tenant.slug, doc.id)

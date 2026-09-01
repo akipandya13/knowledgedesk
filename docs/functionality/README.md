@@ -13,7 +13,11 @@ Permissions are named from the RBAC model in
 |---|------------|
 | 01 | [Authentication](01-authentication.md) |
 | 02 | [Password management](02-password-management.md) |
+| 43 | [Multi-factor authentication (TOTP)](43-multi-factor-authentication.md) |
+| 44 | [Single sign-on (OIDC)](44-single-sign-on.md) — subscription-gated |
+| 45 | [Session & API-key management](45-session-and-api-key-management.md) |
 | 03 | [Roles & permissions (RBAC)](03-roles-and-permissions.md) |
+| 42 | [Fine-grained access control](42-fine-grained-access.md) — custom roles, groups, grants, ACLs, clearance |
 | 04 | [API keys / service accounts](04-api-keys-and-service-accounts.md) |
 | 05 | [Multi-tenancy & workspaces](05-multi-tenancy-and-workspaces.md) |
 | 06 | [User management](06-user-management.md) |

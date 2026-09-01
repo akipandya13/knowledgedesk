@@ -1,5 +1,9 @@
 # API keys / service accounts
 
+> Superseded for new keys by **hashed, named, multi-key, expiring** API keys —
+> see [Session & API-key management](45-session-and-api-key-management.md). The
+> single plaintext `Tenant.api_key` described below still works.
+
 ## What it does
 
 Gives machine integrations a way to call the API on behalf of one workspace,

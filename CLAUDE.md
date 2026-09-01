@@ -17,11 +17,15 @@ documents, ask natural-language questions, get grounded answers with citations.
 
 Deep reference already written — **use it, keep it current**:
 
-- [`docs/functionality/`](docs/functionality/) — one file per capability (41 +
+- [`docs/functionality/`](docs/functionality/) — one file per capability (45 +
   index). If you add or change a feature, update the matching file.
 - [`docs/RBAC_V1.md`](docs/RBAC_V1.md) — the authorisation + document-scope model.
+- [`docs/FINE_GRAINED_RBAC.md`](docs/FINE_GRAINED_RBAC.md) — custom roles, groups,
+  grants, resource ACLs and clearance, layered on RBAC_V1.
 - [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) — the metrics/events/traces
   architecture and how to add a sink.
+- [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — login/MFA/SSO/sessions/
+  API-keys/password-policy and the `sso` subscription entitlement.
 - [`docs/`](docs/) — older `*_FIX.md` notes on specific incidents.
 
 ---
@@ -35,8 +39,9 @@ backend/app/
   database.py        SQLAlchemy models + init_db() migrations + role/scope constants
   rbac.py            Permission constants + ROLE_PERMISSIONS matrix (pure data)
   auth.py            get_principal, require(), tenant_ctx(), legacy guard aliases
-  security.py        bcrypt, JWT, refresh tokens, lockout
-  crypto.py          Fernet encryption for connector secrets
+  security.py        bcrypt, JWT, refresh tokens, lockout, TOTP, email tokens, api-key hashing, pw policy
+  authn.py           login rate-limiter, transactional email, entitlements, OIDC client
+  crypto.py          Fernet encryption (connector + MFA + SSO secrets)
   model_catalog.py   model profiles + connector provider field specs (static)
   tenant_settings.py effective_settings / resolve_model_config / embedding_locked
   observability/     signal facade + pluggable sinks (metrics/events/traces)
@@ -125,12 +130,21 @@ skip it. `tsc` is the gate.
 - Every protected route uses `Depends(require(Permission.X))` or
   `Depends(tenant_ctx(Permission.X))` from `app/auth.py`. **Do not** write
   `if principal.role == "tenant_admin"` or compare `ROLE_RANK`.
-- To add/move a capability: edit `ROLE_PERMISSIONS` in
+- To add/move a **built-in** capability: edit `ROLE_PERMISSIONS` in
   [`backend/app/rbac.py`](backend/app/rbac.py) — one place — and mirror the
   change in [`frontend/src/lib/auth/permissions.ts`](frontend/src/lib/auth/permissions.ts).
+- Per-request effective perms (`principal.perms`) fold in **custom roles + grants**
+  from [`backend/app/authz.py`](backend/app/authz.py). `require()` reads that set.
+  For object-scoped checks use `authz.can_on(db, principal, perm, type, id)`, not
+  a bare `require()`. See [`docs/FINE_GRAINED_RBAC.md`](docs/FINE_GRAINED_RBAC.md).
+- New permission string? add it to `Permission`, decide its built-in role
+  membership, add a `PERMISSION_DESCRIPTIONS` entry, keep it out of
+  `PLATFORM_PERMISSIONS` unless it truly is platform-only, and mirror in
+  `permissions.ts`.
 - New frontend page? add its prefix→permission row in
   `frontend/src/app/(dashboard)/layout.tsx` and a nav entry with a `perm` in
-  `Sidebar.tsx`.
+  `Sidebar.tsx`. Gate UI with the auth context's `hasPermission()` (reflects
+  grants), not the pure `can(user, …)`.
 - `superadmin` must never gain a workspace-content permission. `service` (API
   key) must never gain `user.manage`.
 
@@ -183,6 +197,16 @@ Call `audit.record(db, action="...", actor_email=..., actor_role=...,
 tenant_id=..., detail=...)` on every security-relevant mutation (auth events,
 user/tenant lifecycle, settings, connectors, document deletion). Action names are
 dotted: `user.created`, `tenant.model_settings_changed`.
+
+### Authentication
+
+Login is a two-step flow (password → optional TOTP). New sessions go through
+`auth_routes.mint_session` / `_issue_session` so refresh tokens carry device
+metadata — don't create `RefreshToken` rows by hand. Subscription-gated features
+check `authn.entitlement_enabled(tenant, "<name>")` and return `402` when off;
+add new gated features to `authn.KNOWN_ENTITLEMENTS`. Transactional email always
+goes through `authn.send_email` (pluggable; `console` in dev). MFA/SSO secrets
+use `crypto.encrypt_secrets`. Full map: [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md).
 
 ### Observability
 

@@ -9,6 +9,7 @@ export type Permission =
   | "document.read"
   | "document.write.workspace"
   | "document.write.tenant"
+  | "document.delete"
   | "insights.read"
   | "settings.read"
   | "settings.write"
@@ -16,6 +17,7 @@ export type Permission =
   | "data_connector.manage"
   | "audit.read"
   | "observability.read"
+  | "access.manage"
   | "user.manage"
   | "tenant.manage"
   | "platform.read";
@@ -37,6 +39,49 @@ export interface CurrentUser {
   role: Role;
   tenant: TenantRef | null;
   force_password_change: boolean;
+  mfa_enabled?: boolean;
+  email_verified?: boolean;
+  auth_provider?: string;
+}
+
+export type LoginResult = TokenPair | { mfa_required: true; mfa_token: string };
+
+export interface AuthSession {
+  id: number;
+  user_agent: string;
+  ip: string;
+  label: string;
+  created_at: string | null;
+  last_used_at: string | null;
+}
+
+export interface AuthPolicy {
+  mfa_required: boolean;
+  require_verified_email: boolean;
+  entitlements: Record<string, boolean>;
+}
+
+export interface ApiKeyRow {
+  id: number;
+  name: string;
+  prefix: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  revoked: boolean;
+  created_at: string | null;
+}
+
+export interface SsoConfig {
+  configured: boolean;
+  entitled: boolean;
+  display_name?: string;
+  issuer?: string;
+  client_id?: string;
+  client_secret_set?: boolean;
+  allowed_domains?: string[];
+  default_role?: string;
+  is_active?: boolean;
+  callback_url?: string;
 }
 
 export interface TokenPair {
@@ -156,8 +201,64 @@ export interface UserRow {
   full_name: string;
   role: Role;
   is_active: boolean;
+  clearance: number;
   last_login_at: string | null;
   created_at: string | null;
+}
+
+// ── Fine-grained access ──────────────────────────────────────────
+
+export type GrantEffect = "allow" | "deny";
+export type SubjectType = "user" | "group";
+
+export interface PermissionInfo {
+  key: string;
+  description: string;
+  resource_grantable: boolean;
+}
+
+export interface AccessCatalog {
+  permissions: PermissionInfo[];
+  confidentiality_levels: Record<string, number>;
+  resource_types: string[];
+}
+
+export interface CustomRole {
+  id: number;
+  key: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  created_at: string | null;
+}
+
+export interface AccessGroup {
+  id: number;
+  name: string;
+  description: string;
+  members: { user_id: number; email: string | null }[];
+}
+
+export interface SubjectAssignments {
+  roles: { assignment_id: number; role_id: number; key: string }[];
+  grants: { id: number; permission: string; effect: GrantEffect; note: string }[];
+}
+
+export interface ResourceGrantRow {
+  id: number;
+  subject_type: SubjectType;
+  subject_id: number;
+  subject_label: string | null;
+  permission: string;
+}
+
+export interface MyAccess {
+  role: Role;
+  permissions: string[];
+  custom_roles: { id: number; key: string; name: string }[];
+  groups: { id: number; name: string }[];
+  clearance: number;
+  confidentiality_enforced: boolean;
 }
 
 export interface TenantRow {

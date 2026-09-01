@@ -32,6 +32,43 @@ class Settings(BaseSettings):
     login_max_failures: int = 5
     login_lockout_minutes: int = 15
 
+    # ── Authentication hardening ────────────────────────────────────
+    # Login throttling (sliding window, in-process). Complements per-account lockout.
+    auth_login_rate_per_min: int = 12           # per (ip + email)
+    auth_login_rate_ip_per_min: int = 60        # per ip across all accounts
+    # Password policy (min_length above still applies)
+    auth_pw_require_upper: bool = False
+    auth_pw_require_lower: bool = False
+    auth_pw_require_digit: bool = False
+    auth_pw_require_symbol: bool = False
+    auth_pw_history: int = 5                     # reject reuse of the last N hashes
+    auth_pw_breach_check: bool = False           # HIBP k-anonymity range API (keyless)
+    # MFA (TOTP). Per-user opt-in; tenants may require it (settings_json.mfa_required).
+    auth_totp_issuer: str = "KnowledgeDesk"
+    auth_mfa_token_minutes: int = 5              # lifetime of the interim MFA challenge token
+    # Legacy X-Admin-Key bypass — off by default now.
+    auth_legacy_admin_key_enabled: bool = False
+    # Optional: also set the refresh token as an httpOnly cookie on login/refresh.
+    auth_refresh_cookie: bool = False
+    auth_cookie_secure: bool = True
+    # CORS
+    cors_allow_origins: str = "*"                # comma list; "*" = any
+
+    # ── Transactional email (verification / password reset) ─────────
+    email_sender: str = "console"               # console | smtp | noop
+    email_from: str = "no-reply@knowledgedesk.local"
+    email_public_base_url: str = "http://localhost:3000"   # base for links in emails
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+
+    # ── Subscription entitlements (feature gates) ───────────────────
+    # Comma list, "*" = everything. Per-tenant overrides live in
+    # tenant.settings_json["entitlements"]. Known: sso
+    entitlements: str = ""
+
     # Bootstrap accounts (created at first startup if missing)
     superadmin_email: str = "superadmin@knowledgedesk.local"
     superadmin_password: str = "ChangeMe!Now1"          # forced change on first login

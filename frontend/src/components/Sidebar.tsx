@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType, SVGProps } from "react";
 import type { CurrentUser, Permission } from "@/lib/types";
-import { can } from "@/lib/auth/permissions";
+import { useAuth } from "@/lib/auth/AuthProvider";
 import {
   IconAsk,
   IconAudit,
@@ -62,25 +62,31 @@ const SECTIONS: NavSection[] = [
       { href: "/connectors", label: "Data connectors", icon: IconPlug, perm: "data_connector.manage" },
       { href: "/model-connectors", label: "Model connectors", icon: IconModel, perm: "model_connector.manage" },
       { href: "/settings", label: "Settings", icon: IconSettings, perm: "settings.write" },
+      { href: "/access", label: "Access control", icon: IconLock, perm: "access.manage" },
       { href: "/observability", label: "Observability", icon: IconGauge, perm: "observability.read" },
     ],
   },
   {
     label: "Account",
-    items: [{ href: "/change-password", label: "Change password", icon: IconLock }],
+    items: [
+      { href: "/security", label: "Security", icon: IconLock },
+      { href: "/change-password", label: "Change password", icon: IconLock },
+    ],
   },
 ];
 
-function sectionsFor(user: CurrentUser): NavSection[] {
+function sectionsFor(has: (p: Permission) => boolean): NavSection[] {
   return SECTIONS.map((sec) => ({
     ...sec,
-    items: sec.items.filter((it) => !it.perm || can(user, it.perm)),
+    items: sec.items.filter((it) => !it.perm || has(it.perm)),
   })).filter((sec) => sec.items.length > 0);
 }
 
 export function Sidebar({ user, open }: { user: CurrentUser; open: boolean }) {
   const pathname = usePathname();
-  const sections = sectionsFor(user);
+  const { hasPermission } = useAuth();
+  void user;
+  const sections = sectionsFor(hasPermission);
 
   return (
     <aside className={`sidebar${open ? " open" : ""}`}>

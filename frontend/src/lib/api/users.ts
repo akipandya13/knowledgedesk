@@ -22,7 +22,7 @@ export function createUser(body: CreateUserBody) {
 
 export function updateUser(
   id: number,
-  body: { full_name?: string; role?: Role; is_active?: boolean },
+  body: { full_name?: string; role?: Role; is_active?: boolean; clearance?: number },
 ) {
   return apiFetch<UserRow>(`/users/${id}`, { method: "PATCH", body });
 }

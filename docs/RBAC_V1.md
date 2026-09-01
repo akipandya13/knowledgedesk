@@ -4,6 +4,13 @@ This document describes how authorisation works in KnowledgeDesk after the RBAC
 pass: a single permission matrix, one enforcement point per route, and a
 two-layer document model (personal workspace vs company-wide).
 
+> **Layered on top of this:** custom roles, groups, per-subject allow/deny
+> grants, per-object ACLs and clearance-based confidentiality — see
+> [`FINE_GRAINED_RBAC.md`](FINE_GRAINED_RBAC.md). That layer is inert until an
+> admin uses it, so everything below still describes the effective behaviour of
+> a default workspace. Two permissions were added there: `document.delete`
+> (resource-grantable) and `access.manage` (administers the fine-grained model).
+
 ---
 
 ## 1. Principals

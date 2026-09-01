@@ -37,6 +37,9 @@ os.environ.update(
     OBSERVABILITY_SINKS="stdout,sqlite",
     OBSERVABILITY_HEALTH_PROBE_SECONDS="0",
     OBS_STDOUT_METRICS="false",
+    AUTH_LOGIN_RATE_PER_MIN="5",
+    AUTH_LOGIN_RATE_IP_PER_MIN="100000",
+    EMAIL_SENDER="console",
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

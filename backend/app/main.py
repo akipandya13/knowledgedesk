@@ -18,7 +18,7 @@ from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
                        init_db)
 from .observability.middleware import ObservabilityMiddleware
 from .rbac import Permission
-from .routers import admin, connectors, documents, query
+from .routers import access, admin, connectors, documents, query, sso
 from .routers import auth_routes, observability as observability_router, users as users_router
 from .services import llm, vectorstore
 from .services.ingestion import ingest_document
@@ -34,8 +34,10 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name, version="1.0.0",
               description="Semantic internal search — ask questions, get cited answers.")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"], expose_headers=["*"])
+_cors = [o.strip() for o in (settings.cors_allow_origins or "*").split(",") if o.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=_cors or ["*"], allow_methods=["*"],
+                   allow_headers=["*"], expose_headers=["*"],
+                   allow_credentials=settings.auth_refresh_cookie)
 # Observability is initialised before the middleware records anything.
 obs.setup(settings)
 app.add_middleware(ObservabilityMiddleware)
@@ -48,6 +50,8 @@ app.include_router(query.router)
 app.include_router(admin.router)
 app.include_router(connectors.router)
 app.include_router(observability_router.router)
+app.include_router(access.router)
+app.include_router(sso.router)
 
 
 @app.get("/metrics", include_in_schema=False)

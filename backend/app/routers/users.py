@@ -35,13 +35,18 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     role: str | None = None
     is_active: bool | None = None
+    clearance: int | None = None          # ABAC max confidentiality level; needs access.manage
+
+
+def _is_super(principal: Principal) -> bool:
+    return principal.role == ROLE_SUPERADMIN
 
 
 def _scope_tenant(principal: Principal, db,
                   tenant_slug: str | None) -> Tenant | None:
     """Resolve which tenant this operation applies to, enforcing scope."""
-    if principal.role == ROLE_TENANT_ADMIN:
-        return principal.tenant               # own tenant, always
+    if not _is_super(principal):
+        return principal.tenant               # own tenant, always (any workspace user manager)
     # superadmin: explicit tenant, or None to manage platform admins
     if tenant_slug:
         tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
@@ -55,14 +60,15 @@ def _user_out(u: User) -> dict:
     return {
         "id": u.id, "email": u.email, "full_name": u.full_name,
         "role": u.role, "is_active": bool(u.is_active),
+        "clearance": u.clearance if u.clearance is not None else 100,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
         "created_at": u.created_at.isoformat() if u.created_at else None,
     }
 
 
 def _guard_target(principal: Principal, target: User) -> None:
-    """tenant_admin may only touch tenant users of their own tenant."""
-    if principal.role == ROLE_TENANT_ADMIN:
+    """A workspace user manager may only touch tenant users of their own tenant."""
+    if not _is_super(principal):
         if (target.tenant_id != principal.tenant.id
                 or target.role not in TENANT_ROLES):
             raise HTTPException(404, "User not found")
@@ -76,7 +82,7 @@ def list_users(tenant: str | None = None,
     q = db.query(User)
     if scope:
         q = q.filter(User.tenant_id == scope.id)
-    elif principal.role == ROLE_SUPERADMIN:
+    elif _is_super(principal):
         q = q.filter(User.role == ROLE_SUPERADMIN)
     return [_user_out(u) for u in q.order_by(User.created_at).all()]
 
@@ -93,7 +99,7 @@ def create_user(req: UserCreate,
 
     role = req.role
     scope = _scope_tenant(principal, db, req.tenant_slug)
-    if principal.role == ROLE_TENANT_ADMIN:
+    if not _is_super(principal):
         if role not in TENANT_ROLES:
             raise HTTPException(400, "Role must be member or tenant_admin")
     else:                                                  # superadmin
@@ -139,7 +145,7 @@ def update_user(user_id: int, req: UserUpdate,
         raise HTTPException(400, "You cannot disable your own account")
 
     if req.role and req.role != target.role:
-        if principal.role == ROLE_TENANT_ADMIN and req.role not in TENANT_ROLES:
+        if not _is_super(principal) and req.role not in TENANT_ROLES:
             raise HTTPException(400, "Role must be member or tenant_admin")
         if (target.role == ROLE_TENANT_ADMIN and req.role == ROLE_MEMBER
                 and target.tenant_id):
@@ -153,6 +159,11 @@ def update_user(user_id: int, req: UserUpdate,
 
     if req.full_name is not None:
         target.full_name = req.full_name.strip()
+    if req.clearance is not None:
+        from ..rbac import Permission
+        if not principal.can(Permission.ACCESS_MANAGE):
+            raise HTTPException(403, "Setting clearance requires access.manage")
+        target.clearance = max(0, int(req.clearance))
     if req.is_active is not None:
         target.is_active = 1 if req.is_active else 0
         if not req.is_active:

@@ -37,6 +37,7 @@ class Permission:
     DOC_READ = "document.read"
     DOC_WRITE_WORKSPACE = "document.write.workspace"   # own private workspace docs
     DOC_WRITE_TENANT = "document.write.tenant"          # company-wide docs + any user's docs
+    DOC_DELETE = "document.delete"                      # resource-grantable delete
 
     # Workspace administration
     INSIGHTS_READ = "insights.read"
@@ -46,6 +47,7 @@ class Permission:
     DATA_CONNECTOR_MANAGE = "data_connector.manage"
     AUDIT_READ = "audit.read"
     OBSERVABILITY_READ = "observability.read"   # metrics / events / traces
+    ACCESS_MANAGE = "access.manage"             # custom roles, groups, grants, clearance
     USER_MANAGE = "user.manage"
 
     # Platform (superadmin)
@@ -63,10 +65,43 @@ ALL_PERMISSIONS: frozenset[str] = frozenset(
 WORKSPACE_PERMISSIONS: frozenset[str] = frozenset({
     Permission.QUERY_RUN, Permission.FEEDBACK_WRITE,
     Permission.DOC_READ, Permission.DOC_WRITE_WORKSPACE, Permission.DOC_WRITE_TENANT,
+    Permission.DOC_DELETE,
     Permission.INSIGHTS_READ, Permission.SETTINGS_READ, Permission.SETTINGS_WRITE,
     Permission.MODEL_CONNECTOR_MANAGE, Permission.DATA_CONNECTOR_MANAGE,
-    Permission.AUDIT_READ,
+    Permission.AUDIT_READ, Permission.ACCESS_MANAGE,
 })
+
+# Permissions that make sense as a per-object grant (app.authz.can_on).
+RESOURCE_PERMISSIONS: frozenset[str] = frozenset({
+    Permission.DOC_READ, Permission.DOC_WRITE_WORKSPACE, Permission.DOC_DELETE,
+})
+
+# Platform permissions may never be put into a tenant custom role or grant.
+PLATFORM_PERMISSIONS: frozenset[str] = frozenset({
+    Permission.TENANT_MANAGE, Permission.PLATFORM_READ,
+})
+#: What a tenant custom role / grant is allowed to contain.
+ASSIGNABLE_PERMISSIONS: frozenset[str] = frozenset(ALL_PERMISSIONS) - PLATFORM_PERMISSIONS
+
+PERMISSION_DESCRIPTIONS: dict[str, str] = {
+    Permission.QUERY_RUN: "Ask questions and run searches",
+    Permission.FEEDBACK_WRITE: "Rate answers",
+    Permission.DOC_READ: "See the document list and search results",
+    Permission.DOC_WRITE_WORKSPACE: "Upload / delete documents in own workspace",
+    Permission.DOC_WRITE_TENANT: "Publish company-wide docs; manage any user's docs",
+    Permission.DOC_DELETE: "Delete a document (grantable per-object)",
+    Permission.INSIGHTS_READ: "View workspace insights and query history",
+    Permission.SETTINGS_READ: "View the workspace model/RAG configuration",
+    Permission.SETTINGS_WRITE: "Change workspace model/RAG settings",
+    Permission.MODEL_CONNECTOR_MANAGE: "Manage LLM / embedding connectors",
+    Permission.DATA_CONNECTOR_MANAGE: "Manage Drive / SharePoint connectors",
+    Permission.AUDIT_READ: "Read the workspace audit log",
+    Permission.OBSERVABILITY_READ: "Read metrics, events and traces",
+    Permission.ACCESS_MANAGE: "Manage custom roles, groups, grants and clearance",
+    Permission.USER_MANAGE: "Create and manage users",
+    Permission.TENANT_MANAGE: "Platform: manage workspaces",
+    Permission.PLATFORM_READ: "Platform: read platform audit and stats",
+}
 
 
 # ── The matrix ──────────────────────────────────────────────────────
@@ -82,11 +117,13 @@ _MEMBER: set[str] = {
 
 _TENANT_ADMIN: set[str] = _MEMBER | {
     Permission.DOC_WRITE_TENANT,
+    Permission.DOC_DELETE,
     Permission.SETTINGS_WRITE,
     Permission.MODEL_CONNECTOR_MANAGE,
     Permission.DATA_CONNECTOR_MANAGE,
     Permission.AUDIT_READ,
     Permission.OBSERVABILITY_READ,
+    Permission.ACCESS_MANAGE,
     Permission.USER_MANAGE,
 }
 

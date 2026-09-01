@@ -15,11 +15,13 @@ const MEMBER: Permission[] = [
 const TENANT_ADMIN: Permission[] = [
   ...MEMBER,
   "document.write.tenant",
+  "document.delete",
   "settings.write",
   "model_connector.manage",
   "data_connector.manage",
   "audit.read",
   "observability.read",
+  "access.manage",
   "user.manage",
 ];
 

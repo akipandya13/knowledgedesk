@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from .. import authz
 from ..auth import Principal, get_db, require
 from ..database import QueryLog
 from ..rbac import Permission
@@ -44,25 +45,23 @@ class FeedbackRequest(BaseModel):
     helpful: bool
 
 
-def _access(principal: Principal, scope: SearchScope) -> dict:
-    return {"user_id": principal.user_id, "scope": scope}
-
-
 @router.post("/ask")
 async def ask(req: AskRequest,
-             principal: Principal = Depends(require(Permission.QUERY_RUN))):
+             principal: Principal = Depends(require(Permission.QUERY_RUN)),
+             db=Depends(get_db)):
     """One-shot answer with citations and optional document/source filters."""
     return await rag.answer(principal.tenant, req.question.strip(),
                             req.filters.clean() if req.filters else None,
-                            access=_access(principal, req.scope))
+                            access=authz.retrieval_access(db, principal, req.scope))
 
 
 @router.post("/ask/stream")
 async def ask_stream(req: AskRequest,
-                     principal: Principal = Depends(require(Permission.QUERY_RUN))):
+                     principal: Principal = Depends(require(Permission.QUERY_RUN)),
+                     db=Depends(get_db)):
     """Server-Sent Events stream: meta → token* → done."""
     filters = req.filters.clean() if req.filters else None
-    access = _access(principal, req.scope)
+    access = authz.retrieval_access(db, principal, req.scope)
 
     async def event_source():
         async for event in rag.answer_stream(principal.tenant, req.question.strip(),
@@ -76,12 +75,13 @@ async def ask_stream(req: AskRequest,
 
 @router.post("/search")
 def search(req: AskRequest,
-           principal: Principal = Depends(require(Permission.QUERY_RUN))):
+           principal: Principal = Depends(require(Permission.QUERY_RUN)),
+           db=Depends(get_db)):
     """Raw semantic search — passages only, no LLM. Instant, zero cost."""
     try:
         hits = rag.retrieve(principal.tenant, req.question.strip(),
                             req.filters.clean() if req.filters else None,
-                            _access(principal, req.scope))
+                            authz.retrieval_access(db, principal, req.scope))
     except (rag.embeddings.ModelLoadBlocked, rag.embeddings.EmbeddingError) as exc:
         raise HTTPException(status_code=409, detail=rag._blocked_model_answer(exc)) from exc
     return {"results": rag._sources(hits)}

@@ -670,6 +670,16 @@ tr:last-child td {
   background: var(--ink);
   color: var(--surface);
 }
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.6;
+  font-size: 12px;
+}
+.link-btn:hover { opacity: 1; }
 
 /* ── Toast ────────────────────────────────────────────────────── */
 .toast-host {
