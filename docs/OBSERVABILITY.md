@@ -57,6 +57,14 @@ Selected by `OBSERVABILITY_SINKS` (comma list). Built-in:
 | `prometheus` | marker → enables `GET /metrics` | registry is rendered on scrape; optional `OBS_PROMETHEUS_TOKEN` |
 | `webhook` | batched NDJSON `POST` to `OBS_WEBHOOK_URL` | async, off-thread |
 | `otlp` | OTLP/HTTP JSON span export to `OBS_OTLP_ENDPOINT` | experimental, dependency-free; spans only |
+| `postgres` | batched INSERT of events/spans into one table (`OBS_POSTGRES_TABLE`) | centralized SQL log store; `psycopg` imported only if selected; `OBS_POSTGRES_DSN` |
+| `mongodb` | batched `insert_many` of events/spans into one collection | centralized NoSQL log store; `pymongo` imported only if selected; `OBS_MONGO_URI` |
+
+`postgres` / `mongodb` are the **centralized log collection** backends —
+config-selected per deployment. The bundled `docker-compose.yml` `postgres` /
+`mongodb` services are opt-in (`docker compose --profile postgres up -d`);
+point the DSN/URI at any other instance instead. See
+[`LOGGING.md`](LOGGING.md).
 
 ### Add your own (the "mould it" seam)
 
@@ -95,6 +103,9 @@ not a single call site.
 | `OBS_PROMETHEUS_PATH` / `OBS_PROMETHEUS_TOKEN` | `/metrics` / _(none)_ | Prometheus endpoint |
 | `OBS_WEBHOOK_URL` / `OBS_WEBHOOK_TOKEN` / `OBS_WEBHOOK_BATCH` | — / — / `100` | webhook sink |
 | `OBS_OTLP_ENDPOINT` / `OBS_OTLP_HEADERS` | — / — | OTLP sink (`k=v,k2=v2` headers) |
+| `OBS_POSTGRES_DSN` / `OBS_POSTGRES_TABLE` / `OBS_POSTGRES_BATCH` | — / `kd_logs` / `50` | postgres sink |
+| `OBS_MONGO_URI` / `OBS_MONGO_DB` / `OBS_MONGO_COLLECTION` / `OBS_MONGO_BATCH` | — / `knowledgedesk` / `logs` / `50` | mongodb sink |
+| `LOG_LEVEL` / `LOG_FORMAT` / `LOG_BRIDGE_LEVEL` | `INFO` / `json` / `WARNING` | structured stdlib logging + the WARNING→event bridge ([LOGGING.md](LOGGING.md)) |
 
 **Client scenarios**
 
@@ -102,6 +113,8 @@ not a single call site.
 - *Prometheus + Grafana*: `OBSERVABILITY_SINKS=prometheus,sqlite`, scrape `/metrics`.
 - *OpenTelemetry*: `OBSERVABILITY_SINKS=otlp,prometheus`, `OBS_OTLP_ENDPOINT=http://collector:4318`.
 - *SIEM / data lake*: `OBSERVABILITY_SINKS=webhook`, point `OBS_WEBHOOK_URL` at their intake.
+- *Already runs Postgres*: `OBSERVABILITY_SINKS=stdout,postgres`, set `OBS_POSTGRES_DSN` — a centralized, queryable SQL log store, cross-instance.
+- *Already runs MongoDB*: `OBSERVABILITY_SINKS=stdout,mongodb`, set `OBS_MONGO_URI` — same, NoSQL.
 - *Their bespoke stack*: implement a sink (§2).
 
 ---

@@ -83,6 +83,7 @@ Permissions are named from the RBAC model in
 | 37 | [Health check](37-health-check.md) |
 | 38 | [Demo seed](38-demo-seed.md) |
 | 41 | [Observability](41-observability.md) — metrics, events, traces; pluggable sinks |
+| 51 | [Application logging](51-application-logging.md) — structured JSON logs, correlation ids, error handler, centralized collection (Postgres/Mongo) |
 
 ## Architecture
 

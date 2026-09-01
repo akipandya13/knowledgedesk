@@ -38,6 +38,11 @@ def _route_template(request: Request) -> str:
 class ObservabilityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         rid = request.headers.get("x-request-id") or _ctx.new_id(8)
+        # Also on the ASGI scope (shared with the Request the global exception
+        # handler receives) — that handler runs in ServerErrorMiddleware,
+        # *outside* every middleware here, after this dispatch's `finally` has
+        # already torn down the contextvar.
+        request.scope["kd_request_id"] = rid
         tokens = _ctx.bind(request_id=rid, route=request.url.path)
         gauge("http.server.in_flight", _inc())
         t0 = time.perf_counter()

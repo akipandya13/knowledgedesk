@@ -6,9 +6,9 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -18,8 +18,10 @@ from .auth import get_db, tenant_ctx
 from .config import get_settings
 from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
                        init_db)
+from .observability import context as obs_ctx
 from .observability.middleware import ObservabilityMiddleware
 from .activity_middleware import ActivityMiddleware
+from .logging_setup import configure_logging
 from .request_context import RequestContextMiddleware
 from .rbac import Permission
 from .secret_resolver import available_providers, resolve_secret
@@ -31,11 +33,10 @@ from . import security
 from .model_catalog import HEAVY_LOCAL_MODELS, LARGE_OLLAMA_MODELS, SAFE_DEMO_OLLAMA_MODELS, profile_defaults
 from .tenant_settings import as_bool
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
+settings = get_settings()
+configure_logging(settings)
 log = logging.getLogger("knowledgedesk")
 
-settings = get_settings()
 app = FastAPI(title=settings.app_name, version="1.0.0",
               description="Semantic internal search — ask questions, get cited answers.")
 
@@ -71,6 +72,37 @@ app.include_router(observability_router.router)
 app.include_router(access.router)
 app.include_router(sso.router)
 app.include_router(me_router.router)
+
+
+# ── Error logs ────────────────────────────────────────────────────────
+# The one place an unhandled exception is turned into: a structured log line
+# (stack trace + correlation ids, via logging_setup), an observability error
+# event + counter (so it hits every configured sink), and a response that
+# never leaks internals to the caller.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # A handler for the bare Exception class runs in Starlette's outermost
+    # ServerErrorMiddleware — *outside* every middleware here, after
+    # ObservabilityMiddleware's `finally` has already cleared the correlation
+    # contextvar. Both survive on the ASGI scope (the same Request), so
+    # re-bind them for the duration of the log line + event below.
+    actor_info = request.scope.get("kd_actor") or {}
+    rid = (request.scope.get("kd_request_id") or obs_ctx.request_id()
+          or request.headers.get("x-request-id", ""))
+    tokens = obs_ctx.bind(request_id=rid, actor=actor_info.get("email"),
+                         route=request.url.path)
+    try:
+        log.error("Unhandled exception on %s %s", request.method, request.url.path,
+                 exc_info=exc)
+        obs.count("app.errors", type=type(exc).__name__,
+                 help="Unhandled exceptions, by type")
+        obs.event("app.error", level="error", method=request.method,
+                 path=request.url.path, error_type=type(exc).__name__,
+                 error=str(exc)[:500], tenant_id=actor_info.get("tenant_id"))
+    finally:
+        obs_ctx.unbind(tokens)
+    return JSONResponse(status_code=500,
+                        content={"detail": "Internal server error", "request_id": rid})
 
 
 @app.get("/metrics", include_in_schema=False)
@@ -232,6 +264,9 @@ async def _record_health() -> dict:
 @app.on_event("startup")
 def startup() -> None:
     global _health_task
+    # Re-apply after uvicorn installs its own logging config (which happens
+    # after this module is imported) — last configuration wins.
+    configure_logging(settings)
     init_db()
     db = SessionLocal()
     try:

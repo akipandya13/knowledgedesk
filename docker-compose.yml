@@ -30,6 +30,48 @@ services:
     #           count: all
     #           capabilities: [gpu]
 
+  # ── Centralized log collection (optional — SQL) ─────────────────────
+  # Off by default; select with `docker compose --profile postgres up -d` and
+  # add "postgres" to OBSERVABILITY_SINKS (+ OBS_POSTGRES_DSN in .env). Any
+  # other Postgres works too — point OBS_POSTGRES_DSN at it and skip this
+  # service. See docs/LOGGING.md.
+  postgres:
+    image: postgres:16-alpine
+    container_name: kd-postgres
+    profiles: ["postgres"]
+    environment:
+      - POSTGRES_USER=kd
+      - POSTGRES_PASSWORD=kd
+      - POSTGRES_DB=knowledgedesk
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kd"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Centralized log collection (optional — NoSQL) ───────────────────
+  # Off by default; select with `docker compose --profile mongodb up -d` and
+  # add "mongodb" to OBSERVABILITY_SINKS (+ OBS_MONGO_URI in .env). Any other
+  # MongoDB (incl. Atlas) works too — point OBS_MONGO_URI at it and skip this
+  # service. See docs/LOGGING.md.
+  mongodb:
+    image: mongo:7
+    container_name: kd-mongodb
+    profiles: ["mongodb"]
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "127.0.0.1:27017:27017"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # ── One-shot: pulls the default model on first boot ────────────────
   ollama-init:
     image: ollama/ollama:latest
@@ -112,3 +154,5 @@ volumes:
   app_data:
   caddy_data:
   caddy_config:
+  postgres_data:
+  mongo_data:

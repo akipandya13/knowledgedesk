@@ -175,7 +175,7 @@ class Settings(BaseSettings):
     # Open, pluggable monitoring. The metric registry is always on; where signals
     # are also *sent* is chosen here. See docs/OBSERVABILITY.md.
     observability_enabled: bool = True
-    # Comma list of sink names: noop | stdout | sqlite | prometheus | webhook | otlp
+    # Comma list of sink names: noop | stdout | sqlite | prometheus | webhook | otlp | postgres | mongodb
     observability_sinks: str = "stdout,sqlite,prometheus"
     observability_service_name: str = "knowledgedesk"
     observability_sample_traces: float = 1.0          # 0..1 span sampling
@@ -193,6 +193,29 @@ class Settings(BaseSettings):
     obs_webhook_batch: int = 100
     obs_otlp_endpoint: str = ""                       # e.g. http://otel-collector:4318
     obs_otlp_headers: str = ""                        # "k=v,k2=v2"
+
+    # ── Centralized log collection: SQL (Postgres) / NoSQL (Mongo) ───
+    # Config-selected, not hardcoded: pick whichever a deployment/customer
+    # already runs by adding the name to OBSERVABILITY_SINKS. Neither driver is
+    # imported unless its sink is actually selected. See docs/LOGGING.md.
+    obs_postgres_dsn: str = ""       # postgresql://user:pass@host:5432/dbname
+    obs_postgres_table: str = "kd_logs"
+    obs_postgres_batch: int = 50
+    obs_mongo_uri: str = ""          # mongodb://user:pass@host:27017
+    obs_mongo_db: str = "knowledgedesk"
+    obs_mongo_collection: str = "logs"
+    obs_mongo_batch: int = 50
+
+    # ── Application logging ──────────────────────────────────────────
+    # Every stdlib `logging` call (this app's modules, dependencies, uvicorn's
+    # own access/error logs) is emitted as one JSON line carrying the same
+    # request_id/tenant/actor as observability events — see app/logging_setup.py.
+    log_level: str = "INFO"
+    log_format: str = "json"          # json | text (text is easier to read locally)
+    # WARNING+ log records are also mirrored into the observability event
+    # stream (kind="app.log") so they reach whatever sinks are configured —
+    # including postgres/mongodb above — without duplicating the concern.
+    log_bridge_level: str = "WARNING"
 
     # ── Secret resolution ─────────────────────────────────────────
     # Any secret value (config or a stored connector field) may be a reference

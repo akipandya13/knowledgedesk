@@ -20,3 +20,10 @@ pyotp==2.9.0
 cryptography==44.0.0
 boto3==1.35.90
 google-auth==2.38.0
+
+# Optional centralized-log-collection sinks (app/observability/sinks/).
+# Only imported if a deployment actually selects "postgres" / "mongodb" in
+# OBSERVABILITY_SINKS — see docs/LOGGING.md. Small, so kept in the base image
+# rather than a separate extras group.
+psycopg[binary]==3.2.3
+pymongo==4.10.1

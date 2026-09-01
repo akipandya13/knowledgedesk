@@ -24,6 +24,10 @@ Deep reference already written — **use it, keep it current**:
   grants, resource ACLs and clearance, layered on RBAC_V1.
 - [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) — the metrics/events/traces
   architecture and how to add a sink.
+- [`docs/LOGGING.md`](docs/LOGGING.md) — structured JSON stdlib logging +
+  correlation ids (`app/logging_setup.py`), the global error handler, the
+  WARNING→event bridge, and the `postgres`/`mongodb` centralized-collection
+  sinks (compose profiles).
 - [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md) — the two records (tamper-evident
   `audit_log` hash chain + behavioural `activity_log`), how to add coverage,
   chain verification, retention (`scripts/purge_logs.py`).
@@ -57,9 +61,10 @@ backend/app/
   secret_resolver.py pluggable ${provider:locator} secret resolution (env/file/vault/awssm/…)
   request_context.py per-request ip / user-agent / request-id capture (governance)
   activity_middleware.py  one activity_log row per authenticated API call
+  logging_setup.py   structured JSON stdlib logging: formatter + correlation filter + WARNING→event bridge
   model_catalog.py   model profiles + connector provider field specs (static)
   tenant_settings.py effective_settings / resolve_model_config / embedding_locked
-  observability/     signal facade + pluggable sinks (metrics/events/traces)
+  observability/     signal facade + pluggable sinks (metrics/events/traces/logs; incl. postgres, mongodb)
   routers/           thin HTTP layer — auth_routes, users, documents, query, admin, connectors, observability
   services/          the actual work:
     ingestion.py     validate → dedup → queue; parse → chunk → embed → upsert
@@ -276,6 +281,20 @@ monitoring vendor's client into app code — new backends are **sinks**
 disabled and must never raise into the request path. Audit is the compliance
 record; observability events are the ops stream — they are complementary, keep
 both.
+
+### Logging
+
+Just use `logging.getLogger(__name__)` — `app/logging_setup.py` makes every
+record a structured JSON line with `request_id`/`tenant`/`actor`/`route`
+already attached (via a filter reading the obs contextvars); no need to thread
+ids through. Don't call `logging.basicConfig` or add handlers — call
+`configure_logging()` if anything. WARNING+ records auto-mirror into the obs
+event stream (`app.log`), so they reach every sink incl. `postgres`/`mongodb`;
+don't also hand-emit an `obs.event` for the same thing. Unhandled exceptions
+are turned into a safe correlated 500 + `app.error` by the global handler in
+`main.py` — don't add blanket `try/except: return 500` in routers. New log/event
+store → a **sink** (never a vendor client in app code). See
+[`docs/LOGGING.md`](docs/LOGGING.md).
 
 ### Laptop-safe mode
 

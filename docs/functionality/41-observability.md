@@ -15,8 +15,15 @@ backend) is chosen by configuration, with no vendor as a hard dependency.
   no sinks.
 - **Sinks are plugins** selected by `OBSERVABILITY_SINKS`. Built-in: `noop`,
   `stdout` (JSON lines), `sqlite` (queryable, separate DB), `prometheus`
-  (`/metrics`), `webhook` (batched POST), `otlp` (OTLP/HTTP spans). Add your own
-  by implementing `Sink` and registering it in `SINK_BUILDERS`.
+  (`/metrics`), `webhook` (batched POST), `otlp` (OTLP/HTTP spans), and two
+  **centralized log collection** backends — `postgres` (SQL) and `mongodb`
+  (NoSQL) — config-selected per deployment, drivers imported lazily. Add your
+  own by implementing `Sink` and registering it in `SINK_BUILDERS`.
+- **Application logs are part of the same pipeline.** Every stdlib `logging`
+  call is structured JSON with the same correlation ids
+  ([`app/logging_setup.py`](../../backend/app/logging_setup.py)), and WARNING+
+  records are mirrored into this event stream (`kind="app.log"`) — see
+  [Application logging](51-application-logging.md).
 - **Never breaks a request** — every sink call is guarded; blocking sinks run
   off-thread with a bounded, drop-oldest queue; disabled = no-op.
 - **Automatic correlation** — the HTTP middleware assigns `X-Request-ID` and
@@ -61,6 +68,7 @@ client scenarios: [`../OBSERVABILITY.md`](../OBSERVABILITY.md).
 
 ## Related
 
+[Application logging](51-application-logging.md) ·
 [Audit log](33-audit-log.md) (the compliance record; observability is the ops
 stream) · [Health check](37-health-check.md) · [Workspace insights](31-workspace-insights.md) ·
 [Roles & permissions](03-roles-and-permissions.md)

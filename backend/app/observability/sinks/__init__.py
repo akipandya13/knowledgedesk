@@ -20,8 +20,10 @@ import logging
 import os
 
 from .base import Sink
+from .mongodb import MongoSink
 from .noop import NoopSink
 from .otlp import OtlpSink
+from .postgres import PostgresSink
 from .prometheus import PrometheusSink
 from .sqlite import SqliteSink
 from .stdout import StdoutSink
@@ -53,6 +55,14 @@ SINK_BUILDERS: dict[str, callable] = {
     "otlp": lambda s: OtlpSink(endpoint=s.obs_otlp_endpoint,
                                headers=_sec(getattr(s, "obs_otlp_headers", "")),
                                service_name=getattr(s, "observability_service_name", "knowledgedesk")),
+    # Centralized log/event collection, config-selected — see docs/LOGGING.md.
+    "postgres": lambda s: PostgresSink(dsn=_sec(getattr(s, "obs_postgres_dsn", "")),
+                                       table=getattr(s, "obs_postgres_table", "kd_logs"),
+                                       batch=getattr(s, "obs_postgres_batch", 50)),
+    "mongodb": lambda s: MongoSink(uri=_sec(getattr(s, "obs_mongo_uri", "")),
+                                   database=getattr(s, "obs_mongo_db", "knowledgedesk"),
+                                   collection=getattr(s, "obs_mongo_collection", "logs"),
+                                   batch=getattr(s, "obs_mongo_batch", 50)),
 }
 
 
