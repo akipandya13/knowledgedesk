@@ -34,6 +34,11 @@ Deep reference already written — **use it, keep it current**:
 - [`docs/TENANCY.md`](docs/TENANCY.md) — isolation layers, the organization
   lifecycle (provision/configure/suspend/delete), `Tenant.status`,
   `TENANT_SCOPED_MODELS`, entitlements.
+- [`docs/RESILIENCE.md`](docs/RESILIENCE.md) — timeouts, `resilience.retry_call`,
+  `Idempotency-Key` middleware, the startup reconciler (`recovery.py`), error
+  isolation.
+- [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) — `scripts/backup.py` /
+  `scripts/restore.py` (DB + keys + Qdrant snapshots) and the DR runbook.
 - [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — login/MFA/SSO/sessions/
   API-keys/password-policy and the `sso` subscription entitlement.
 - [`docs/DEPLOYMENT_TLS.md`](docs/DEPLOYMENT_TLS.md) — Caddy TLS termination,
@@ -52,6 +57,10 @@ Deep reference already written — **use it, keep it current**:
 backend/app/
   main.py            app wiring, startup bootstrap, /livez /readyz /api/health, /api/demo/seed, SPA fallback
   health.py          liveness / readiness / dependency probes (db·qdrant·llm), health_report
+  resilience.py      retry_call / aretry_call — backoff + jitter for transient failures
+  idempotency.py     Idempotency-Key replay middleware for mutating requests
+  timeout_middleware.py  hard per-request ceiling → 504
+  recovery.py        startup reconciler: close out work interrupted by a restart
   config.py          Settings (pydantic-settings) — every env var lives here
   database.py        SQLAlchemy models + init_db() migrations + role/scope constants
   rbac.py            Permission constants + ROLE_PERMISSIONS matrix (pure data)
@@ -302,6 +311,19 @@ are turned into a safe correlated 500 + `app.error` by the global handler in
 `main.py` — don't add blanket `try/except: return 500` in routers. New log/event
 store → a **sink** (never a vendor client in app code). See
 [`docs/LOGGING.md`](docs/LOGGING.md).
+
+### Resilience
+
+Wrap a transient-failure-prone external call in `resilience.retry_call(fn, op=…,
+retry_on=(…))` — pass the retryable exceptions explicitly so deterministic
+errors fail fast (already done for Qdrant, remote embeddings, connectors). Every
+outbound call needs an explicit timeout; there's a global per-request ceiling
+(`RequestTimeoutMiddleware` → 504) — don't rely on it as the primary bound. New
+long-lived / background work that can be interrupted: add its cleanup to
+`recovery.reconcile_on_startup`. New mutating endpoint that a client might
+double-submit: it's already covered if the caller sends `Idempotency-Key` (the
+middleware is generic) — nothing to wire per route. See
+[`docs/RESILIENCE.md`](docs/RESILIENCE.md).
 
 ### Laptop-safe mode
 

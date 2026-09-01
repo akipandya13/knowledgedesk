@@ -19,10 +19,13 @@ from .config import get_settings
 from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
                        init_db)
 from . import health
+from . import recovery
 from .observability import context as obs_ctx
 from .observability.middleware import ObservabilityMiddleware
 from .observability.resources import resource_metrics_loop
 from .activity_middleware import ActivityMiddleware
+from .idempotency import IdempotencyMiddleware
+from .timeout_middleware import RequestTimeoutMiddleware
 from .logging_setup import configure_logging
 from .request_context import RequestContextMiddleware
 from .rbac import Permission
@@ -52,6 +55,10 @@ app.add_middleware(ObservabilityMiddleware)
 # activity logs, then record one activity row per authenticated API call.
 app.add_middleware(RequestContextMiddleware)
 app.add_middleware(ActivityMiddleware)
+# Resilience: replay retried mutating requests that carry an Idempotency-Key,
+# then bound every request with a hard timeout (added last → outermost).
+app.add_middleware(IdempotencyMiddleware)
+app.add_middleware(RequestTimeoutMiddleware)
 
 # ── Edge hardening (added last → evaluated first) ───────────────────
 _hosts = [h.strip() for h in (settings.trusted_hosts or "*").split(",") if h.strip()]
@@ -263,6 +270,7 @@ def startup() -> None:
     try:
         _bootstrap_db(db)
         _enforce_safe_model_defaults(db)
+        recovery.reconcile_on_startup(db)     # close out work interrupted by a restart
     finally:
         db.close()
     if obs.is_enabled():

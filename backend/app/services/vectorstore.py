@@ -16,7 +16,14 @@ from qdrant_client.models import (Distance, FieldCondition, Filter,
 from ..config import get_settings
 from ..crypto import decrypt, encrypt
 from ..model_catalog import safe_slug
+from ..resilience import retry_call
 from .embeddings import embedding_dim
+
+try:                                             # network/timeout errors talking to Qdrant
+    from qdrant_client.http.exceptions import ResponseHandlingException
+    _TRANSIENT = (ResponseHandlingException, ConnectionError, TimeoutError, OSError)
+except Exception:                                # pragma: no cover
+    _TRANSIENT = (ConnectionError, TimeoutError, OSError)
 
 _client: QdrantClient | None = None
 
@@ -84,9 +91,11 @@ def upsert_chunks(tenant_slug: str, doc_id: int, filename: str,
         )
         for ch, vec in zip(chunks, vectors)
     ]
+    cname = collection_name(tenant_slug, embedding_model, embedding_provider)
     for i in range(0, len(points), 256):
-        client().upsert(collection_name=collection_name(tenant_slug, embedding_model, embedding_provider),
-                        points=points[i:i + 256])
+        batch = points[i:i + 256]
+        retry_call(lambda b=batch: client().upsert(collection_name=cname, points=b),
+                   op="qdrant.upsert", retry_on=_TRANSIENT)
 
 
 def _access_conditions(access: dict | None) -> list:
@@ -162,14 +171,16 @@ def search(tenant_slug: str, vector: List[float], top_k: int,
         embedding_model=embedding_model,
         embedding_provider=embedding_provider,
     )
-    hits = client().query_points(
-        collection_name=collection_name(tenant_slug, embedding_model, embedding_provider),
-        query=vector,
-        query_filter=_query_filter(filters, access),
-        limit=top_k,
-        score_threshold=score_threshold,
-        with_payload=True,
-    ).points
+    hits = retry_call(
+        lambda: client().query_points(
+            collection_name=collection_name(tenant_slug, embedding_model, embedding_provider),
+            query=vector,
+            query_filter=_query_filter(filters, access),
+            limit=top_k,
+            score_threshold=score_threshold,
+            with_payload=True,
+        ),
+        op="qdrant.search", retry_on=_TRANSIENT).points
     return [
         {
             "score": h.score,

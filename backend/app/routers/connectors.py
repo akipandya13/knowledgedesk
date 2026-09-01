@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -19,7 +20,10 @@ from ..crypto import decrypt_secrets, encrypt_secrets
 from ..database import ConnectorSyncRun, DataConnector, SessionLocal, Tenant, utcnow
 from ..model_catalog import DATA_CONNECTOR_PROVIDERS
 from ..rbac import Permission
+from ..resilience import retry_call
 from ..services import audit
+
+_CONNECTOR_TRANSIENT = (httpx.TransportError, ConnectionError, TimeoutError)
 from ..services.connectors import PROVIDERS
 from ..services.connectors.base import ConnectorConfigError
 from ..services.ingestion import ingest_document, register_document, validate_file
@@ -288,7 +292,8 @@ def _run_sync(connector_id: int, tenant_slug: str, run_id: int) -> None:
 
         cfg = conn.config_json or {}
         secrets = decrypt_secrets(conn.secret_encrypted)
-        files = provider.list_files(cfg, secrets)
+        files = retry_call(lambda: provider.list_files(cfg, secrets),
+                           op=f"connector.{conn.provider}.list", retry_on=_CONNECTOR_TRANSIENT)
 
         pending: list[tuple[int, str, bytes]] = []
         for f in files:
@@ -297,7 +302,9 @@ def _run_sync(connector_id: int, tenant_slug: str, run_id: int) -> None:
                 skipped += 1
                 continue
             try:
-                fname, data = provider.download_file(f, cfg, secrets)
+                fname, data = retry_call(
+                    lambda f=f: provider.download_file(f, cfg, secrets),
+                    op=f"connector.{conn.provider}.download", retry_on=_CONNECTOR_TRANSIENT)
             except Exception as e:  # noqa: BLE001
                 failed += 1
                 errors.append(f"{name}: download failed: {e}")

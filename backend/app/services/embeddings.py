@@ -89,7 +89,18 @@ def embed_texts(texts: List[str], provider: str | None = None,
     model_name = model_name or s.embedding_model
     t0 = time.perf_counter()
     try:
-        vecs = _embed_dispatch(texts, provider, model_name, batch_size, runtime, s)
+        # Retry only the network-backed providers on a transient blip; a local
+        # model failure (OOM, bad model) is deterministic and fails fast.
+        if provider in ("local", ""):
+            vecs = _embed_dispatch(texts, provider, model_name, batch_size, runtime, s)
+        else:
+            from ..resilience import retry_call
+            import httpx as _httpx
+            vecs = retry_call(
+                lambda: _embed_dispatch(texts, provider, model_name, batch_size, runtime, s),
+                op=f"embedding.{provider}",
+                retry_on=(_httpx.TransportError, _httpx.HTTPStatusError,
+                          ConnectionError, TimeoutError))
         obs.count("embedding.calls", provider=provider, outcome="ok")
         return vecs
     except Exception:

@@ -80,10 +80,12 @@ Permissions are named from the RBAC model in
 | 34 | [Platform administration](34-platform-administration.md) |
 | 35 | [Collections view](35-collections-view.md) |
 | 36 | [Enterprise readiness view](36-enterprise-readiness.md) |
-| 37 | [Health check](37-health-check.md) |
+| 37 | [Health check](37-health-check.md) — liveness / readiness / dependency probes |
 | 38 | [Demo seed](38-demo-seed.md) |
 | 41 | [Observability](41-observability.md) — metrics, events, traces; pluggable sinks |
 | 51 | [Application logging](51-application-logging.md) — structured JSON logs, correlation ids, error handler, centralized collection (Postgres/Mongo) |
+| 52 | [Resilience & recovery](52-resilience-and-recovery.md) — timeouts, retries, idempotency, startup reconciler, error isolation |
+| 53 | [Backup & restore](53-backup-and-restore.md) — consistent DB + keys + Qdrant snapshots |
 
 ## Architecture
 

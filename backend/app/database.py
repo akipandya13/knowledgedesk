@@ -7,8 +7,9 @@ import os
 import secrets
 import datetime as dt
 
-from sqlalchemy import (create_engine, Column, Integer, String, Float, Text,
-                        DateTime, ForeignKey, JSON, Boolean, UniqueConstraint)
+from sqlalchemy import (create_engine, event, Column, Integer, String, Float,
+                        Text, DateTime, ForeignKey, JSON, Boolean,
+                        UniqueConstraint)
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 from .config import get_settings
@@ -21,6 +22,22 @@ engine = create_engine(
     f"sqlite:///{settings.data_dir}/knowledgedesk.db",
     connect_args={"check_same_thread": False},
 )
+
+
+@event.listens_for(engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _rec):
+    """Per-connection resilience: WAL for read/write concurrency, and a bounded
+    wait for a write lock so a brief contention window returns success instead
+    of an immediate 'database is locked'."""
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute(f"PRAGMA busy_timeout={int(settings.sqlite_busy_timeout_ms)}")
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cur.close()
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 Base = declarative_base()
 
@@ -464,6 +481,27 @@ class SsoState(Base):
     code_verifier = Column(String, default="")
     redirect_uri = Column(String, default="")
     created_at = Column(DateTime, default=utcnow)
+
+
+class IdempotencyKey(Base):
+    """Replay cache for mutating requests that carry an ``Idempotency-Key``
+    header. The first request runs and its response is stored; a retry with the
+    same key + method + path returns the stored response instead of acting
+    twice. Scoped per principal so keys can't collide across tenants. Rows past
+    ``IDEMPOTENCY_TTL_HOURS`` are pruned by the startup reconciler / purge_logs.
+    """
+    __tablename__ = "idempotency_keys"
+    id = Column(Integer, primary_key=True)
+    scope = Column(String, index=True)                   # "<tenant_id>:<user_id|api-key>"
+    key = Column(String, index=True)
+    method = Column(String, default="")
+    path = Column(String, default="")
+    request_fingerprint = Column(String, default="")     # sha256(body) — mismatched replay → 409
+    status_code = Column(Integer, default=0)
+    response_body = Column(EncryptedText, default="")    # may contain workspace data
+    in_progress = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=utcnow, index=True)
+    __table_args__ = (UniqueConstraint("scope", "key", name="uq_idempotency_scope_key"),)
 
 
 def _add_column_if_missing(table: str, column: str, ddl: str) -> None:

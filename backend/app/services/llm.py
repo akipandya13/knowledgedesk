@@ -153,7 +153,9 @@ async def _pull_ollama_model(c: dict[str, Any]) -> None:
             "Use 'gemma3:4b' for the local Docker demo."
         )
     log.warning("Ollama model %s is missing; attempting one-time auto-pull because it is demo-safe.", model)
-    async with httpx.AsyncClient(timeout=None) as h:
+    # A model pull is large but must still be bounded — no infinite hang.
+    pull_timeout = httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=10.0)
+    async with httpx.AsyncClient(timeout=pull_timeout) as h:
         r = await h.post(f"{c['ollama_url']}/api/pull", json={"model": model, "stream": False})
         if r.status_code >= 400:
             detail = r.text[:400]

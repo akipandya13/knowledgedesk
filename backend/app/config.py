@@ -218,6 +218,21 @@ class Settings(BaseSettings):
     # including postgres/mongodb above — without duplicating the concern.
     log_bridge_level: str = "WARNING"
 
+    # ── Resilience: timeouts, retries, idempotency, recovery ───────
+    # See docs/RESILIENCE.md.
+    request_timeout_seconds: int = 60          # hard cap per HTTP request; 0 disables
+    request_timeout_exempt_prefixes: str = "/api/query/ask/stream"  # comma list (SSE etc.)
+    retry_max_attempts: int = 3               # transient-failure retries (vector store, remote embeds, connectors)
+    retry_base_delay_ms: int = 200
+    retry_max_delay_ms: int = 3000
+    idempotency_enabled: bool = True          # honour the Idempotency-Key header on mutating requests
+    idempotency_ttl_hours: int = 24
+    recovery_stuck_minutes: int = 30          # startup reconciler: age past which a 'processing'/'running' row is declared interrupted
+    sqlite_busy_timeout_ms: int = 5000        # wait this long for a write lock before 'database is locked'
+
+    # ── Backup / restore (scripts/backup.py, scripts/restore.py) ───
+    backup_dir: str = ""                      # default {DATA_DIR}/backups
+
     # ── Secret resolution ─────────────────────────────────────────
     # Any secret value (config or a stored connector field) may be a reference
     # ${provider:locator}. See docs/SECRETS_MANAGEMENT.md.
