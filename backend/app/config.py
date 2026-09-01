@@ -27,7 +27,11 @@ class Settings(BaseSettings):
     # this should be supplied from a KMS / secrets manager, not a file.
     kd_secret_key: str = ""
     access_token_minutes: int = 30
-    refresh_token_days: int = 14
+    refresh_token_days: int = 14                 # per-rotation rolling expiry
+    # Session lifetime, enforced across refresh-token rotations:
+    auth_session_idle_hours: int = 72            # no refresh within this window → re-login
+    auth_session_max_days: int = 30              # absolute cap; a session cannot outlive this
+    auth_max_sessions_per_user: int = 10         # oldest evicted past this
     password_min_length: int = 10
     login_max_failures: int = 5
     login_lockout_minutes: int = 15
@@ -43,6 +47,7 @@ class Settings(BaseSettings):
     auth_pw_require_symbol: bool = False
     auth_pw_history: int = 5                     # reject reuse of the last N hashes
     auth_pw_breach_check: bool = False           # HIBP k-anonymity range API (keyless)
+    auth_pw_max_age_days: int = 0                # 0 = no expiry; >0 forces a change past this age
     # MFA (TOTP). Per-user opt-in; tenants may require it (settings_json.mfa_required).
     auth_totp_issuer: str = "KnowledgeDesk"
     auth_mfa_token_minutes: int = 5              # lifetime of the interim MFA challenge token
@@ -53,6 +58,17 @@ class Settings(BaseSettings):
     auth_cookie_secure: bool = True
     # CORS
     cors_allow_origins: str = "*"                # comma list; "*" = any
+
+    # ── TLS / reverse proxy ────────────────────────────────────────
+    # The app's public origin (scheme+host). Used for SSO redirect URIs and
+    # email links so they are correct behind the TLS proxy. Set to
+    # https://<KD_DOMAIN> in production.
+    public_base_url: str = ""
+    # Host allow-list (Host header). "*" disables the check.
+    trusted_hosts: str = "*"
+    # In-app HTTP→HTTPS redirect. Usually the proxy (Caddy) does this; enable
+    # only if the app is directly internet-facing.
+    force_https_redirect: bool = False
 
     # ── Transactional email (verification / password reset) ─────────
     email_sender: str = "console"               # console | smtp | noop
@@ -69,10 +85,16 @@ class Settings(BaseSettings):
     # tenant.settings_json["entitlements"]. Known: sso
     entitlements: str = ""
 
-    # Bootstrap accounts (created at first startup if missing)
+    # Bootstrap accounts (created at first startup if missing).
+    # See DEFAULT_USERS_AND_PASSWORDS.md. Override in .env for anything real.
     superadmin_email: str = "superadmin@knowledgedesk.local"
-    superadmin_password: str = "ChangeMe!Now1"          # forced change on first login
-    demo_users_enabled: bool = True                     # demo tenant admin + member
+    superadmin_password: str = "Superadmin!Kd1"
+    superadmin_force_password_change: bool = False      # True → prompt on first login
+    demo_users_enabled: bool = True                     # demo tenant_admin + member
+    demo_admin_email: str = "admin@demo.knowledgedesk.local"
+    demo_admin_password: str = "TenantAdmin!Kd1"
+    demo_member_email: str = "member@demo.knowledgedesk.local"
+    demo_member_password: str = "Member!Kd1234"
 
     # Model profile defaults. Tenant admins can override these per workspace.
     model_profile: str = "demo_fast"
@@ -158,6 +180,17 @@ class Settings(BaseSettings):
     obs_webhook_batch: int = 100
     obs_otlp_endpoint: str = ""                       # e.g. http://otel-collector:4318
     obs_otlp_headers: str = ""                        # "k=v,k2=v2"
+
+    # ── Secret resolution ─────────────────────────────────────────
+    # Any secret value (config or a stored connector field) may be a reference
+    # ${provider:locator}. See docs/SECRETS_MANAGEMENT.md.
+    secrets_cache_ttl: int = 300
+
+    @property
+    def app_base_url(self) -> str:
+        """The app's public origin for building outward-facing links."""
+        return (self.public_base_url or self.email_public_base_url or
+                "http://localhost:3000").rstrip("/")
 
 
 @lru_cache

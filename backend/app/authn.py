@@ -74,6 +74,7 @@ def send_email(to: str, subject: str, body: str) -> None:
             log.info("EMAIL → %s | %s\n%s", to, subject, body)
             return
         if mode == "smtp":
+            from .secret_resolver import resolve_secret
             msg = EmailMessage()
             msg["From"], msg["To"], msg["Subject"] = s.email_from, to, subject
             msg.set_content(body)
@@ -81,7 +82,7 @@ def send_email(to: str, subject: str, body: str) -> None:
                 if s.smtp_starttls:
                     srv.starttls()
                 if s.smtp_user:
-                    srv.login(s.smtp_user, s.smtp_password)
+                    srv.login(s.smtp_user, resolve_secret(s.smtp_password) or "")
                 srv.send_message(msg)
             return
         log.warning("unknown EMAIL_SENDER=%s — email dropped", mode)
@@ -90,7 +91,7 @@ def send_email(to: str, subject: str, body: str) -> None:
 
 
 def link(path: str) -> str:
-    return f"{get_settings().email_public_base_url.rstrip('/')}{path}"
+    return f"{get_settings().app_base_url}{path}"
 
 
 # ── subscription entitlements ─────────────────────────────────────

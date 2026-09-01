@@ -313,18 +313,35 @@ function UsersTab({
 function AuthTab({ toast }: { toast: Toast }) {
   const [policy, setPolicy] = useState<AuthPolicy | null>(null);
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
+  const [providers, setProviders] = useState<string[]>([]);
   const [newKeyName, setNewKeyName] = useState("");
   const [freshKey, setFreshKey] = useState<string | null>(null);
 
   const loadPolicy = useCallback(() => api.getAuthPolicy().then(setPolicy).catch((e) => toast(e.message, "error")), [toast]);
   const loadKeys = useCallback(() => api.listApiKeys().then(setKeys).catch((e) => toast(e.message, "error")), [toast]);
-  useEffect(() => { loadPolicy(); loadKeys(); }, [loadPolicy, loadKeys]);
+  useEffect(() => {
+    loadPolicy(); loadKeys();
+    api.getSecretProviders().then((s) => setProviders(s.providers)).catch(() => undefined);
+  }, [loadPolicy, loadKeys]);
 
   if (!policy || !keys) return <Loading />;
   const ssoEntitled = !!policy.entitlements.sso;
 
   return (
     <>
+      <Card title="Secret sources" style={{ marginBottom: 16 }}>
+        <p className="small" style={{ marginTop: 0 }}>
+          Any secret field (here, connectors, or <span className="mono">.env</span>) may be a
+          reference <span className="mono">{"${provider:locator[#key][|fallback]}"}</span> resolved
+          from an external store instead of the literal value.
+        </p>
+        <div className="chips">
+          {providers.map((p) => (
+            <span key={p} className="chip" style={{ cursor: "default" }}>{p}</span>
+          ))}
+        </div>
+      </Card>
+
       <Card title="Sign-in policy" style={{ marginBottom: 16 }}>
         <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
           <input type="checkbox" checked={policy.mfa_required} onChange={(e) =>

@@ -2,8 +2,11 @@
 
 > Now also: **self-service forgot/reset** (`/api/auth/password/{forgot,reset}`,
 > emailed 1-hour link), **reuse history** (`AUTH_PW_HISTORY`), optional
-> **character-class rules** (`AUTH_PW_REQUIRE_*`) and an optional **Have I Been
-> Pwned** breach check (`AUTH_PW_BREACH_CHECK`). See [`../AUTHENTICATION.md`](../AUTHENTICATION.md) §3.
+> **character-class rules** (`AUTH_PW_REQUIRE_*`), optional **password expiry**
+> (`AUTH_PW_MAX_AGE_DAYS`, off by default per NIST 800-63B) and an optional
+> **Have I Been Pwned** breach check (`AUTH_PW_BREACH_CHECK`). See
+> [`../AUTHENTICATION.md`](../AUTHENTICATION.md) §3 and
+> [security event logging](49-security-event-logging.md).
 
 ## What it does
 

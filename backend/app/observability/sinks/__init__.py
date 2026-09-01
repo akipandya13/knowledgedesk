@@ -30,6 +30,11 @@ from .webhook import WebhookSink
 log = logging.getLogger("knowledgedesk.observability")
 
 
+def _sec(v):
+    from ...secret_resolver import resolve_secret
+    return resolve_secret(v) or ""
+
+
 def _sqlite_builder(s) -> Sink:
     path = getattr(s, "obs_sqlite_path", "") or os.path.join(s.data_dir, "observability.db")
     return SqliteSink(path=path, retention_hours=getattr(s, "obs_sqlite_retention_hours", 168))
@@ -41,12 +46,12 @@ SINK_BUILDERS: dict[str, callable] = {
                                    metrics=getattr(s, "obs_stdout_metrics", False)),
     "sqlite": _sqlite_builder,
     "prometheus": lambda s: PrometheusSink(path=getattr(s, "obs_prometheus_path", "/metrics"),
-                                           token=getattr(s, "obs_prometheus_token", "")),
+                                           token=_sec(getattr(s, "obs_prometheus_token", ""))),
     "webhook": lambda s: WebhookSink(url=s.obs_webhook_url,
-                                     token=getattr(s, "obs_webhook_token", ""),
+                                     token=_sec(getattr(s, "obs_webhook_token", "")),
                                      batch=getattr(s, "obs_webhook_batch", 100)),
     "otlp": lambda s: OtlpSink(endpoint=s.obs_otlp_endpoint,
-                               headers=getattr(s, "obs_otlp_headers", ""),
+                               headers=_sec(getattr(s, "obs_otlp_headers", "")),
                                service_name=getattr(s, "observability_service_name", "knowledgedesk")),
 }
 

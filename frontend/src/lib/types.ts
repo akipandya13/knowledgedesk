@@ -51,6 +51,8 @@ export interface AuthSession {
   user_agent: string;
   ip: string;
   label: string;
+  current: boolean;
+  session_started_at: string | null;
   created_at: string | null;
   last_used_at: string | null;
 }

@@ -16,6 +16,12 @@ RUN python -c "import os; from sentence_transformers import SentenceTransformer;
 
 COPY app ./app
 COPY static ./static
+COPY scripts ./scripts
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers + --forwarded-allow-ips lets the app trust X-Forwarded-Proto/For
+# from the TLS-terminating reverse proxy (Caddy), so request.url.scheme is https
+# and Secure cookies / SSO redirect URIs are correct. Safe when nothing else can
+# reach :8000 (compose binds it to 127.0.0.1).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]

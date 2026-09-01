@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from .. import security
 from ..auth import Principal, get_db, require_user_manager
 from ..database import (ROLE_MEMBER, ROLE_SUPERADMIN, ROLE_TENANT_ADMIN,
-                        RefreshToken, TENANT_ROLES, Tenant, User)
+                        RefreshToken, TENANT_ROLES, Tenant, User, utcnow)
 from ..services import audit
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -189,6 +189,7 @@ def reset_password(user_id: int,
     temp = "Kd-" + secrets.token_urlsafe(9)
     target.password_hash = security.hash_password(temp)
     target.password_version += 1
+    target.password_changed_at = utcnow()
     target.force_password_change = 1
     target.failed_logins = 0
     target.locked_until = None

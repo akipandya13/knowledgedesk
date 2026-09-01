@@ -26,15 +26,25 @@ POST /api/auth/login/mfa {mfa_token, code}
   └─ TOTP code OR a single-use recovery code → session
 ```
 
-- **Access token** — HS256 JWT, 30 min. Claims `sub/role/tid/ten/pwv`.
+- **Access token** — HS256 JWT, 30 min. Claims `sub/role/tid/ten/pwv`. `role`
+  is re-read from the DB per request, so demotions take effect immediately.
 - **Refresh token** — opaque 256-bit, only its SHA-256 hash stored, single-use
-  rotation, reuse ⇒ whole-family revoke. Now also stores `user_agent`, `ip`,
-  `label`, `last_used_at` for the sessions view.
+  rotation, reuse ⇒ whole-family revoke. Stores `user_agent`, `ip`, `label`,
+  `last_used_at`, and `session_started_at` (the chain origin, carried across
+  rotations).
+- **Session lifetime** — enforced *across* rotation, not per token:
+  - **idle timeout** `AUTH_SESSION_IDLE_HOURS` (default 72) — no refresh within
+    the window ends the session;
+  - **absolute cap** `AUTH_SESSION_MAX_DAYS` (default 30) — a session cannot
+    outlive this regardless of activity;
+  - **concurrent cap** `AUTH_MAX_SESSIONS_PER_USER` (default 10) — the oldest
+    chain is evicted when a new session pushes past it.
+  Each check emits `auth.session.timed_out` / `auth.session.evicted`.
 - `pwv` (password version) still invalidates every access token on password
   change / reset.
-- Optional `AUTH_REFRESH_COOKIE=true` also sets the refresh token as an
-  httpOnly, SameSite=Lax cookie (`/api/auth` path). Requires explicit
-  `CORS_ALLOW_ORIGINS`.
+- Optional `AUTH_REFRESH_COOKIE=true` sets the refresh token as an httpOnly,
+  SameSite=Lax cookie (`/api/auth` path); `/refresh` and `/logout` read it as a
+  fallback and `/logout` clears it. Requires explicit `CORS_ALLOW_ORIGINS`.
 
 ## 2. TOTP multi-factor
 
@@ -76,9 +86,17 @@ default) logs the link so it works with zero config; `smtp` uses
 
 ## 5. Sessions
 
-`GET /api/auth/sessions` lists the caller's live refresh tokens (device, ip,
-started, last used). `DELETE /api/auth/sessions/{id}` revokes one;
-`DELETE /api/auth/sessions` revokes all. UI: **Security** page.
+`GET /api/auth/sessions` lists the caller's live refresh chains (device, ip,
+session start, last active). Send `X-Refresh-Token: <your refresh token>` (the
+web client does) to get the `current: true` marker on your own row.
+
+- `DELETE /api/auth/sessions/{id}` — revoke one
+- `DELETE /api/auth/sessions?keep_current=true` — revoke every other session
+- `DELETE /api/auth/sessions` — revoke all (including your own)
+
+Sessions are also revoked automatically on password change/reset, account
+disable, logout, idle/absolute timeout, and refresh-token reuse. UI: **Security**
+page.
 
 ## 6. API keys (v2)
 

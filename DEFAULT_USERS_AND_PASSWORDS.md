@@ -1,17 +1,40 @@
-# KnowledgeDesk v1 — Default Users and Passwords
+# KnowledgeDesk — Default Users and Passwords
 
-These accounts are created automatically on first startup when the SQLite volume is empty.
+Created automatically on first startup (when the SQLite volume is empty). One
+account per role type. **Sign in at `http://localhost:3000`.**
 
-| Role | Email / Key | Password | Notes |
+| Role type | Email / Key | Password | Scope |
 |---|---|---|---|
-| Platform superadmin | `superadmin@knowledgedesk.local` | `ChangeMe!Now1` | Must change password on first login. Manages workspaces/platform only; no tenant document access. |
-| Demo tenant admin | `admin@demo.knowledgedesk.local` | `Demo-Admin123!` | Can upload documents, manage users, see audit, configure connectors, and change tenant model settings. |
-| Demo employee/member | `employee@demo.knowledgedesk.local` | `Demo-User123!` | Can ask questions, view documents and insights. |
-| Demo service API key | `kd-demo-key` | Not applicable | Use as `X-API-Key: kd-demo-key` for API demos and connector-style calls. |
-| Legacy platform admin API key | `kd-admin-key` | Not applicable | Legacy script compatibility only. Prefer the superadmin UI login. Change before production. |
+| **superadmin** (platform) | `superadmin@knowledgedesk.local` | `Superadmin!Kd1` | Workspaces, cross-workspace users, platform audit/stats. **No** access to any workspace's documents or Q&A. |
+| **tenant_admin** (workspace) | `admin@demo.knowledgedesk.local` | `TenantAdmin!Kd1` | Everything in the `demo` workspace: documents (company-wide + members'), users, settings, connectors, audit, access control, observability. |
+| **member** (workspace) | `member@demo.knowledgedesk.local` | `Member!Kd1234` | Ask questions, manage own workspace documents, read the shared document list and insights, set up own 2FA. |
+| **service** (API key) | `kd-demo-key` | — | `X-API-Key: kd-demo-key`. `tenant_admin`-level content access for the `demo` workspace; cannot manage users. |
 
-## Important
+Legacy: `ADMIN_API_KEY=kd-admin-key` (`X-Admin-Key`) is **disabled** unless
+`AUTH_LEGACY_ADMIN_KEY_ENABLED=true`. Use the superadmin login instead.
 
-- Change these before any real deployment.
-- Values come from `.env` for first boot. If Docker volumes already exist, changing `.env` will not rewrite existing users.
-- To reset demo users from scratch, stop the stack and remove the `app_data` volume.
+## Notes
+
+- None of these are prompted to change their password on first login (demo
+  posture). Set `SUPERADMIN_FORCE_PASSWORD_CHANGE=true` to re-enable that for the
+  platform account.
+- Emails are pre-verified. 2FA (TOTP) is available per user at **Security**
+  (`/security`); a workspace can require it under **Access control →
+  Authentication**.
+- All values come from `.env` / `backend/app/config.py` at first boot only —
+  `SUPERADMIN_*`, `DEMO_ADMIN_*`, `DEMO_MEMBER_*`, `DEMO_TENANT_API_KEY`.
+  Changing them does **not** rewrite users in an existing volume.
+
+## Reset from scratch
+
+```bash
+docker compose down
+docker volume rm knowledgedesk_app_data      # wipes users, documents metadata, audit
+docker compose up -d
+```
+
+## Before any real deployment
+
+Change every value above, enable `SUPERADMIN_FORCE_PASSWORD_CHANGE`, set a strong
+`JWT_SECRET` / `KD_SECRET_KEY`, and set `DEMO_TENANT_ENABLED=false` /
+`DEMO_USERS_ENABLED=false`.

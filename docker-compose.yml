@@ -56,8 +56,10 @@ services:
     volumes:
       - app_data:/data
       - ./sample_docs:/app/sample_docs:ro
+    # Bound to localhost only — the public entry point is Caddy (:443).
+    # Remove this block entirely for a hardened deployment.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       qdrant:
         condition: service_healthy
@@ -79,11 +81,34 @@ services:
     environment:
       - NODE_ENV=production
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - app
+
+  # ── TLS-terminating reverse proxy ─────────────────────────────────
+  # The only service that should be exposed to the outside world.
+  # Automatic HTTPS: Let's Encrypt for a real KD_DOMAIN, local CA for localhost.
+  caddy:
+    image: caddy:2-alpine
+    container_name: kd-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+      - web
+    environment:
+      - KD_DOMAIN=${KD_DOMAIN:-localhost}
+      - KD_TLS_EMAIL=${KD_TLS_EMAIL:-admin@example.com}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
 
 volumes:
   qdrant_data:
   ollama_data:
   app_data:
+  caddy_data:
+  caddy_config:

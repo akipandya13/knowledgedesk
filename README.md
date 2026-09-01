@@ -49,7 +49,11 @@ docker compose up -d --build        # first build downloads CPU torch + Gemma 3 
 docker logs -f kd-ollama-init       # wait for "Model ready."
 ```
 
-Open **http://localhost:8000** and sign in with one of the demo accounts below.
+Open **https://localhost** (TLS-terminated by Caddy) and sign in with one of the
+demo accounts below. To silence the self-signed-cert warning on `localhost`,
+run `docker compose exec caddy caddy trust` once. The app and web tiers are also
+on `http://localhost:8000` / `http://localhost:3000` for local development.
+See [`docs/DEPLOYMENT_TLS.md`](docs/DEPLOYMENT_TLS.md) for production certs.
 
 ## Default users and passwords
 

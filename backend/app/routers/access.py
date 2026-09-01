@@ -119,6 +119,23 @@ def _role_out(db, r: Role) -> dict:
 
 # ── catalog / introspection ─────────────────────────────────────
 
+@router.get("/secrets")
+def secret_providers(principal: Principal = Depends(_manage)) -> dict:
+    """Which secret backends this deployment can resolve references from.
+    Any secret field (here or in .env) may be ``${provider:locator[#key][|default]}``."""
+    from .. import secret_resolver
+    return {
+        "providers": secret_resolver.available_providers(),
+        "syntax": "${provider:locator[#key][|fallback]}",
+        "examples": [
+            "${env:SMTP_PASSWORD}",
+            "${file:/run/secrets/smtp_pw}",
+            "${vault:secret/data/kd#client_secret}",
+            "${awssm:kd/prod/bedrock}",
+        ],
+    }
+
+
 @router.get("/catalog")
 def catalog(principal: Principal = Depends(_manage)) -> dict:
     return {

@@ -14,6 +14,7 @@ from qdrant_client.models import (Distance, FieldCondition, Filter,
                                   PayloadField, PointStruct, VectorParams)
 
 from ..config import get_settings
+from ..crypto import decrypt, encrypt
 from ..model_catalog import safe_slug
 from .embeddings import embedding_dim
 
@@ -69,7 +70,7 @@ def upsert_chunks(tenant_slug: str, doc_id: int, filename: str,
                 "filename": filename,
                 "page": ch.page,
                 "chunk_index": ch.index,
-                "text": ch.text,
+                "text": encrypt(ch.text),          # document content — encrypted at rest
                 "source": metadata.get("source", "upload"),
                 "department": metadata.get("department", ""),
                 "confidentiality": metadata.get("confidentiality", "internal"),
@@ -175,7 +176,7 @@ def search(tenant_slug: str, vector: List[float], top_k: int,
             "doc_id": h.payload.get("doc_id"),
             "filename": h.payload.get("filename"),
             "page": h.payload.get("page"),
-            "text": h.payload.get("text", ""),
+            "text": decrypt(h.payload.get("text", "")) or "",
             "embedding_model": h.payload.get("embedding_model", ""),
             "scope": h.payload.get("scope", "tenant"),
         }
@@ -216,3 +217,33 @@ def healthy() -> bool:
         return True
     except Exception:
         return False
+
+
+def reencrypt_text_payloads() -> dict:
+    """Encrypt any legacy plaintext ``text`` payloads across every KnowledgeDesk
+    collection. Idempotent — already-encrypted values are skipped. Returns a
+    per-collection tally. Used by scripts/reencrypt_at_rest.py."""
+    from ..crypto import encrypt
+    c = client()
+    tally: dict[str, int] = {}
+    try:
+        names = [col.name for col in c.get_collections().collections
+                 if col.name.startswith("kd_")]
+    except Exception:
+        return tally
+    for name in names:
+        updated, offset = 0, None
+        while True:
+            points, offset = c.scroll(collection_name=name, limit=256, offset=offset,
+                                      with_payload=True, with_vectors=False)
+            for p in points:
+                txt = (p.payload or {}).get("text")
+                if isinstance(txt, str) and not txt.startswith("kdenc:"):
+                    c.set_payload(collection_name=name, payload={"text": encrypt(txt)},
+                                  points=[p.id])
+                    updated += 1
+            if not offset:
+                break
+        if updated:
+            tally[name] = updated
+    return tally

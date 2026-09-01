@@ -17,7 +17,7 @@ documents, ask natural-language questions, get grounded answers with citations.
 
 Deep reference already written — **use it, keep it current**:
 
-- [`docs/functionality/`](docs/functionality/) — one file per capability (45 +
+- [`docs/functionality/`](docs/functionality/) — one file per capability (49 +
   index). If you add or change a feature, update the matching file.
 - [`docs/RBAC_V1.md`](docs/RBAC_V1.md) — the authorisation + document-scope model.
 - [`docs/FINE_GRAINED_RBAC.md`](docs/FINE_GRAINED_RBAC.md) — custom roles, groups,
@@ -26,6 +26,12 @@ Deep reference already written — **use it, keep it current**:
   architecture and how to add a sink.
 - [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — login/MFA/SSO/sessions/
   API-keys/password-policy and the `sso` subscription entitlement.
+- [`docs/DEPLOYMENT_TLS.md`](docs/DEPLOYMENT_TLS.md) — Caddy TLS termination,
+  forwarded headers, `PUBLIC_BASE_URL`.
+- [`docs/ENCRYPTION_AT_REST.md`](docs/ENCRYPTION_AT_REST.md) — envelope KEK/DEK,
+  encrypted columns + Qdrant payloads, rotation, `reencrypt_at_rest.py`.
+- [`docs/SECRETS_MANAGEMENT.md`](docs/SECRETS_MANAGEMENT.md) — `${provider:locator}`
+  references, pluggable providers, where each secret is resolved.
 - [`docs/`](docs/) — older `*_FIX.md` notes on specific incidents.
 
 ---
@@ -41,7 +47,8 @@ backend/app/
   auth.py            get_principal, require(), tenant_ctx(), legacy guard aliases
   security.py        bcrypt, JWT, refresh tokens, lockout, TOTP, email tokens, api-key hashing, pw policy
   authn.py           login rate-limiter, transactional email, entitlements, OIDC client
-  crypto.py          Fernet encryption (connector + MFA + SSO secrets)
+  crypto.py          envelope encryption at rest: KEK/DEK, EncryptedText/JSON, secret bundles
+  secret_resolver.py pluggable ${provider:locator} secret resolution (env/file/vault/awssm/…)
   model_catalog.py   model profiles + connector provider field specs (static)
   tenant_settings.py effective_settings / resolve_model_config / embedding_locked
   observability/     signal facade + pluggable sinks (metrics/events/traces)
@@ -185,11 +192,26 @@ Never read `get_settings()` fields directly for RAG behaviour. Go through
 profile + per-workspace overrides + selected connector are all applied.
 Respect `embedding_locked(tenant, db)` before changing embedding config.
 
-### Secrets
+### Secrets & encryption at rest
 
-Connector credentials are always `crypto.encrypt_secrets(...)` on write and
-`decrypt_secrets(...)` on read. API responses expose only `secret_fields_set`
-(the field names), never values. `""` clears a field, omitted leaves it.
+Connector / MFA / SSO credentials are always `crypto.encrypt_secrets(...)` /
+`decrypt_secrets(...)` (KEK-level). API responses expose only `secret_fields_set`
+(names), never values. `""` clears a field, omitted leaves it.
+
+For **stored content** use the DEK layer: the `EncryptedText` / `EncryptedJSON`
+column types (already on `query_log` + `audit_log`) or `crypto.encrypt/decrypt`
+directly (Qdrant chunk text, obs sink). Ciphertext is tagged `kdenc:` and
+`decrypt` passes legacy plaintext through — so adding encryption to a column
+needs no migration, but run `scripts/reencrypt_at_rest.py` to backfill. Never
+encrypt a column that is filtered/joined in SQL or used as a Qdrant filter key
+(emails, filenames, department, confidentiality). See
+[`docs/ENCRYPTION_AT_REST.md`](docs/ENCRYPTION_AT_REST.md).
+
+When you add a new secret setting, pass it through `secret_resolver.resolve_secret()`
+at the point of use (not at `Settings` construction — resolution can hit a
+network backend and must stay lazy). Stored connector/SSO secrets are already
+covered via `crypto.decrypt_secrets(token, resolve=True)` on the runtime path.
+See [`docs/SECRETS_MANAGEMENT.md`](docs/SECRETS_MANAGEMENT.md).
 
 ### Audit
 
@@ -202,7 +224,10 @@ dotted: `user.created`, `tenant.model_settings_changed`.
 
 Login is a two-step flow (password → optional TOTP). New sessions go through
 `auth_routes.mint_session` / `_issue_session` so refresh tokens carry device
-metadata — don't create `RefreshToken` rows by hand. Subscription-gated features
+metadata, `session_started_at` (chain origin), and the concurrent-session cap —
+don't create `RefreshToken` rows by hand. Session lifetime (idle / absolute /
+concurrent) is enforced across rotation in `refresh()`; keep `session_started_at`
+carried forward. Subscription-gated features
 check `authn.entitlement_enabled(tenant, "<name>")` and return `402` when off;
 add new gated features to `authn.KNOWN_ENTITLEMENTS`. Transactional email always
 goes through `authn.send_email` (pluggable; `console` in dev). MFA/SSO secrets

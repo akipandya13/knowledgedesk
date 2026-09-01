@@ -39,6 +39,7 @@ os.environ.update(
     OBS_STDOUT_METRICS="false",
     AUTH_LOGIN_RATE_PER_MIN="5",
     AUTH_LOGIN_RATE_IP_PER_MIN="100000",
+    AUTH_MAX_SESSIONS_PER_USER="4",
     EMAIL_SENDER="console",
 )
 

@@ -69,6 +69,17 @@ class Principal:
         return has_permission(self.role, permission)
 
 
+def _reject(reason: str, status: int, message: str) -> None:
+    """Emit a security event for a rejected credential, then 401/403."""
+    try:
+        from . import observability as obs
+        obs.count("auth.token.rejected", reason=reason)
+        obs.event("auth.token.rejected", level="warn", reason=reason)
+    except Exception:
+        pass
+    raise HTTPException(status, message)
+
+
 def get_principal(authorization: str = Header(default=""),
                   x_api_key: str = Header(default=""),
                   x_tenant_key: str = Header(default=""),
@@ -77,15 +88,15 @@ def get_principal(authorization: str = Header(default=""),
     if authorization.startswith("Bearer "):
         payload = decode_access_token(authorization[7:].strip())
         if not payload:
-            raise HTTPException(401, "Invalid or expired token")
+            _reject("bad_token", 401, "Invalid or expired token")
         user = db.get(User, int(payload["sub"]))
         if not user or not user.is_active:
-            raise HTTPException(401, "Account is disabled")
+            _reject("disabled_account", 401, "Account is disabled")
         if payload.get("pwv") != user.password_version:
-            raise HTTPException(401, "Session invalidated — please sign in again")
+            _reject("stale_password_version", 401, "Session invalidated — please sign in again")
         tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
         if user.role != ROLE_SUPERADMIN and not tenant:
-            raise HTTPException(401, "Account is not attached to a workspace")
+            _reject("no_workspace", 401, "Account is not attached to a workspace")
         principal = Principal(role=user.role, user=user, tenant=tenant,
                               perms=_resolve_perms(db, user.role, user))
         _bind_observability(principal)
@@ -97,7 +108,7 @@ def get_principal(authorization: str = Header(default=""),
     if service_key:
         tenant = _resolve_api_key(db, service_key)
         if not tenant:
-            raise HTTPException(401, "Invalid or expired API key")
+            _reject("bad_api_key", 401, "Invalid or expired API key")
         principal = Principal(role=ROLE_SERVICE, tenant=tenant,
                               perms=_resolve_perms(db, ROLE_SERVICE, None))
         _bind_observability(principal)
@@ -149,6 +160,19 @@ def _bind_observability(principal: "Principal") -> None:
         pass
 
 
+def log_denied(principal: "Principal", permission: str) -> None:
+    """Security event for an authorization denial. Feeds the events sinks / SIEM.
+    Identity is passed explicitly (sync deps don't propagate obs context)."""
+    try:
+        from . import observability as obs
+        tenant = principal.tenant.slug if principal.tenant else None
+        obs.count("authz.denied", permission=permission, role=principal.role)
+        obs.event("authz.denied", level="warn", permission=permission,
+                  role=principal.role, actor=principal.email, tenant=tenant)
+    except Exception:
+        pass
+
+
 # ── Permission guards ───────────────────────────────────────────────
 
 def require(*permissions: str, tenant_required: bool = True):
@@ -167,6 +191,7 @@ def require(*permissions: str, tenant_required: bool = True):
         held = principal.perms or frozenset()
         missing = needed - held if held else missing_permissions(principal.role, needed)
         if missing:
+            log_denied(principal, sorted(missing)[0])
             if principal.role == ROLE_SUPERADMIN and needed <= WORKSPACE_PERMISSIONS:
                 raise HTTPException(
                     403, "Platform administrator has no access to workspace content")
@@ -193,6 +218,7 @@ def tenant_ctx(*permissions: str):
 def require_member(principal: Principal = Depends(get_principal)) -> Principal:
     """Any authenticated workspace principal (member, tenant_admin or service)."""
     if principal.role == ROLE_SUPERADMIN:
+        log_denied(principal, "workspace.content")
         raise HTTPException(403, "Platform administrator has no access to workspace content")
     if principal.tenant is None:
         raise HTTPException(400, "Workspace context required")
@@ -226,9 +252,10 @@ def require_admin(x_admin_key: str = Header(default=""),
                   authorization: str = Header(default=""),
                   db=Depends(get_db)) -> None:
     s = get_settings()
-    if (s.auth_legacy_admin_key_enabled and x_admin_key
-            and x_admin_key == s.admin_api_key):
-        return
+    if s.auth_legacy_admin_key_enabled and x_admin_key:
+        from .secret_resolver import resolve_secret
+        if x_admin_key == (resolve_secret(s.admin_api_key) or s.admin_api_key):
+            return
     if authorization.startswith("Bearer "):
         payload = decode_access_token(authorization[7:].strip())
         if payload and payload.get("role") == ROLE_SUPERADMIN:

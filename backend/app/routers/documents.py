@@ -22,7 +22,7 @@ from fastapi import (APIRouter, BackgroundTasks, Depends, File, Form,
 from sqlalchemy import and_, or_
 
 from .. import authz
-from ..auth import Principal, get_db, require
+from ..auth import Principal, get_db, log_denied, require
 from ..database import (DOC_SCOPE_TENANT, DOC_SCOPE_WORKSPACE, Document, User)
 from ..rbac import Permission
 from ..services import vectorstore
@@ -231,6 +231,7 @@ def delete_document(doc_id: int,
                and doc.owner_user_id == principal.user_id)
     granted = authz.can_on(db, principal, Permission.DOC_DELETE, "document", doc.id)
     if not (is_admin or owns_it or granted):
+        log_denied(principal, "document.delete")
         raise HTTPException(403, "You can only delete documents in your own workspace")
 
     vectorstore.delete_document(tenant.slug, doc.id)

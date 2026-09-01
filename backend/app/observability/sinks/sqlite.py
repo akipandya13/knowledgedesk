@@ -19,8 +19,20 @@ import sqlite3
 import threading
 import time
 
+from ...crypto import decrypt, encrypt
 from ..models import Event, Span
 from .base import Sink
+
+
+def _enc(obj) -> str:
+    return encrypt(json.dumps(obj, default=str)) or ""
+
+
+def _dec(raw) -> dict:
+    try:
+        return json.loads(decrypt(raw) or "{}")
+    except (ValueError, TypeError):
+        return {}
 
 log = logging.getLogger("knowledgedesk.observability")
 
@@ -81,7 +93,7 @@ class SqliteSink(Sink):
                     "INSERT INTO obs_events(ts,kind,level,tenant,actor,route,request_id,trace_id,fields_json)"
                     " VALUES(?,?,?,?,?,?,?,?,?)",
                     (e.ts, e.kind, e.level, e.tenant, e.actor, e.route,
-                     e.request_id, e.trace_id, json.dumps(e.fields, default=str)),
+                     e.request_id, e.trace_id, _enc(e.fields)),
                 )
                 self._conn.commit()
                 self._maybe_prune()
@@ -96,7 +108,7 @@ class SqliteSink(Sink):
                     " VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (sp.start_wall, sp.name, sp.span_id, sp.parent_id, sp.trace_id,
                      sp.request_id, sp.tenant, sp.status, sp.duration_ms,
-                     json.dumps(sp.attributes, default=str)),
+                     _enc(sp.attributes)),
                 )
                 self._conn.commit()
             except Exception:
@@ -136,7 +148,7 @@ class SqliteSink(Sink):
         return [{
             "ts": r[0], "kind": r[1], "level": r[2], "tenant": r[3], "actor": r[4],
             "route": r[5], "request_id": r[6], "trace_id": r[7],
-            "fields": json.loads(r[8] or "{}"),
+            "fields": _dec(r[8]),
         } for r in rows]
 
     def query_trace(self, trace_id: str, *, tenant: str | None = None) -> list[dict]:
@@ -151,5 +163,5 @@ class SqliteSink(Sink):
         return [{
             "ts": r[0], "name": r[1], "span_id": r[2], "parent_id": r[3],
             "trace_id": r[4], "request_id": r[5], "tenant": r[6], "status": r[7],
-            "duration_ms": r[8], "attributes": json.loads(r[9] or "{}"),
+            "duration_ms": r[8], "attributes": _dec(r[9]),
         } for r in rows]

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from .. import authn
@@ -39,7 +39,7 @@ class MfaLoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str | None = None          # optional when the httpOnly cookie is used
 
 
 class ChangePasswordRequest(BaseModel):
@@ -88,22 +88,51 @@ def _user_out(user: User, tenant: Tenant | None) -> dict:
     }
 
 
+def _active_sessions(db, user_id: int):
+    now = dt.datetime.now(dt.timezone.utc)
+    rows = (db.query(RefreshToken)
+            .filter(RefreshToken.user_id == user_id, RefreshToken.revoked == 0)
+            .order_by(RefreshToken.session_started_at.asc(), RefreshToken.created_at.asc())
+            .all())
+    live = []
+    for r in rows:
+        exp = _aware(r.expires_at)
+        if exp and exp < now:
+            continue
+        live.append(r)
+    return live
+
+
+def _aware(v):
+    return v.replace(tzinfo=dt.timezone.utc) if v is not None and v.tzinfo is None else v
+
+
 def mint_session(db, user: User, *, ip: str = "", user_agent: str = "",
-                 label: str = "") -> dict:
+                 label: str = "", session_started_at=None) -> dict:
     """Create an access token + a stored refresh token. Used by password login,
-    MFA completion, refresh rotation and SSO callback."""
+    MFA completion, refresh rotation and SSO callback. Enforces the per-user
+    concurrent-session cap by evicting the oldest chain."""
+    s = get_settings()
     tenant = db.get(Tenant, user.tenant_id) if user.tenant_id else None
     access = security.create_access_token(
         user_id=user.id, email=user.email, role=user.role,
         tenant_id=user.tenant_id, tenant_slug=tenant.slug if tenant else None,
         password_version=user.password_version)
     raw_refresh, token_hash = security.new_refresh_token()
+    now = utcnow()
     db.add(RefreshToken(user_id=user.id, token_hash=token_hash,
                         expires_at=security.refresh_expiry(),
                         user_agent=(user_agent or "")[:400], ip=ip, label=label,
-                        last_used_at=utcnow()))
+                        session_started_at=session_started_at or now, last_used_at=now))
     db.commit()
-    s = get_settings()
+
+    live = _active_sessions(db, user.id)
+    if len(live) > max(1, s.auth_max_sessions_per_user):
+        for stale in live[: len(live) - s.auth_max_sessions_per_user]:
+            stale.revoked = 1
+        db.commit()
+        obs.count("auth.session.evicted", n=len(live) - s.auth_max_sessions_per_user)
+
     return {
         "access_token": access, "refresh_token": raw_refresh, "token_type": "bearer",
         "expires_in": s.access_token_minutes * 60,
@@ -111,15 +140,27 @@ def mint_session(db, user: User, *, ip: str = "", user_agent: str = "",
     }
 
 
-def _issue_session(db, user: User, request: Request, response: Response | None,
-                   label: str = "") -> dict:
-    out = mint_session(db, user, ip=_client_ip(request),
-                       user_agent=request.headers.get("user-agent", ""), label=label)
+def _set_refresh_cookie(response: Response | None, token: str) -> None:
     s = get_settings()
     if response is not None and s.auth_refresh_cookie:
-        response.set_cookie("kd_refresh", out["refresh_token"], httponly=True,
-                            samesite="lax", secure=s.auth_cookie_secure,
+        response.set_cookie("kd_refresh", token, httponly=True, samesite="lax",
+                            secure=s.auth_cookie_secure,
                             max_age=s.refresh_token_days * 86400, path="/api/auth")
+
+
+def _read_refresh(req: RefreshRequest | None, cookie: str | None) -> str:
+    raw = ((req.refresh_token if req else None) or cookie or "").strip()
+    if not raw:
+        raise HTTPException(401, "No refresh token supplied")
+    return raw
+
+
+def _issue_session(db, user: User, request: Request, response: Response | None,
+                   label: str = "", session_started_at=None) -> dict:
+    out = mint_session(db, user, ip=_client_ip(request),
+                       user_agent=request.headers.get("user-agent", ""), label=label,
+                       session_started_at=session_started_at)
+    _set_refresh_cookie(response, out["refresh_token"])
     return out
 
 
@@ -137,6 +178,7 @@ def _record_password(db, user: User, new_plain: str) -> None:
         db.delete(stale)
     user.password_hash = security.hash_password(new_plain)
     user.password_version += 1
+    user.password_changed_at = utcnow()
     user.force_password_change = 0
     db.query(RefreshToken).filter(RefreshToken.user_id == user.id).update({"revoked": 1})
 
@@ -193,6 +235,16 @@ def login(req: LoginRequest, request: Request, response: Response, db=Depends(ge
 
     user.failed_logins = 0
     user.locked_until = None
+
+    # Password expiry (opt-in): force a change on next step, don't block sign-in.
+    if s.auth_pw_max_age_days > 0 and not user.force_password_change:
+        changed = _aware(user.password_changed_at) or dt.datetime.now(dt.timezone.utc)
+        if (dt.datetime.now(dt.timezone.utc) - changed).days >= s.auth_pw_max_age_days:
+            user.force_password_change = 1
+            audit.record(db, action="auth.password.expired", actor_email=user.email,
+                         tenant_id=user.tenant_id)
+            obs.event("auth.password.expired", level="warn", actor=user.email,
+                      tenant=(user.tenant.slug if user.tenant else None))
     db.commit()
     authn.clear_login_rate(ip, email)
 
@@ -245,9 +297,11 @@ def login_mfa(req: MfaLoginRequest, request: Request, response: Response, db=Dep
 
 
 @router.post("/refresh")
-def refresh(req: RefreshRequest, request: Request, response: Response, db=Depends(get_db)):
-    token_hash = security.hash_refresh_token(req.refresh_token.strip())
-    row = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
+def refresh(request: Request, response: Response, req: RefreshRequest | None = None,
+            kd_refresh: str | None = Cookie(default=None), db=Depends(get_db)):
+    raw = _read_refresh(req, kd_refresh)
+    row = db.query(RefreshToken).filter(
+        RefreshToken.token_hash == security.hash_refresh_token(raw)).first()
     if not row:
         raise HTTPException(401, "Invalid refresh token")
     if row.revoked:
@@ -259,11 +313,26 @@ def refresh(req: RefreshRequest, request: Request, response: Response, db=Depend
         obs.event("auth.refresh.reuse_detected", level="error", user_id=row.user_id)
         raise HTTPException(401, "Session revoked — please sign in again")
 
-    expires = row.expires_at
-    if expires and expires.tzinfo is None:
-        expires = expires.replace(tzinfo=dt.timezone.utc)
-    if not expires or expires < dt.datetime.now(dt.timezone.utc):
+    now = dt.datetime.now(dt.timezone.utc)
+    expires = _aware(row.expires_at)
+    if not expires or expires < now:
         raise HTTPException(401, "Refresh token expired — please sign in again")
+
+    # Idle timeout: this refresh chain has not been used within the window.
+    idle_since = _aware(row.last_used_at) or _aware(row.created_at) or now
+    if (now - idle_since).total_seconds() > get_settings().auth_session_idle_hours * 3600:
+        row.revoked = 1
+        db.commit()
+        obs.event("auth.session.timed_out", level="warn", reason="idle", user_id=row.user_id)
+        raise HTTPException(401, "Session timed out from inactivity — sign in again")
+
+    # Absolute cap: the whole session cannot outlive this, regardless of rotation.
+    started = _aware(row.session_started_at) or _aware(row.created_at) or now
+    if (now - started).total_seconds() > get_settings().auth_session_max_days * 86400:
+        row.revoked = 1
+        db.commit()
+        obs.event("auth.session.timed_out", level="warn", reason="absolute", user_id=row.user_id)
+        raise HTTPException(401, "Session expired — sign in again")
 
     user = db.get(User, row.user_id)
     if not user or not user.is_active:
@@ -271,14 +340,21 @@ def refresh(req: RefreshRequest, request: Request, response: Response, db=Depend
 
     row.revoked = 1
     db.commit()
-    out = _issue_session(db, user, request, response, label=row.label or "")
-    return out
+    obs.event("auth.session.refreshed", actor=user.email)
+    return _issue_session(db, user, request, response, label=row.label or "",
+                          session_started_at=row.session_started_at)
 
 
 @router.post("/logout")
-def logout(req: RefreshRequest, principal: Principal = Depends(get_principal), db=Depends(get_db)):
-    token_hash = security.hash_refresh_token(req.refresh_token.strip())
-    db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).update({"revoked": 1})
+def logout(response: Response, principal: Principal = Depends(get_principal),
+           req: RefreshRequest | None = None,
+           kd_refresh: str | None = Cookie(default=None), db=Depends(get_db)):
+    raw = ((req.refresh_token if req else None) or kd_refresh or "").strip()
+    if raw:
+        token_hash = security.hash_refresh_token(raw)
+        db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).update({"revoked": 1})
+    if get_settings().auth_refresh_cookie:
+        response.delete_cookie("kd_refresh", path="/api/auth")
     db.commit()
     audit.record(db, action="auth.logout", actor_email=principal.email,
                  actor_role=principal.role,
@@ -449,19 +525,25 @@ def mfa_regen_codes(principal: Principal = Depends(get_principal), db=Depends(ge
 # ── sessions (refresh tokens) ────────────────────────────────────
 
 @router.get("/sessions")
-def list_sessions(principal: Principal = Depends(get_principal), db=Depends(get_db)):
+def list_sessions(principal: Principal = Depends(get_principal),
+                  x_refresh_token: str = Header(default=""),
+                  kd_refresh: str | None = Cookie(default=None),
+                  db=Depends(get_db)):
     user = _human(principal)
+    this = ((x_refresh_token or kd_refresh or "").strip())
+    this_hash = security.hash_refresh_token(this) if this else None
     now = dt.datetime.now(dt.timezone.utc)
     rows = (db.query(RefreshToken)
             .filter(RefreshToken.user_id == user.id, RefreshToken.revoked == 0)
             .order_by(RefreshToken.created_at.desc()).all())
     out = []
     for r in rows:
-        exp = r.expires_at.replace(tzinfo=dt.timezone.utc) if r.expires_at and r.expires_at.tzinfo is None else r.expires_at
+        exp = _aware(r.expires_at)
         if exp and exp < now:
             continue
-        out.append({"id": r.id, "user_agent": r.user_agent, "ip": r.ip,
-                    "label": r.label,
+        out.append({"id": r.id, "user_agent": r.user_agent, "ip": r.ip, "label": r.label,
+                    "current": this_hash is not None and r.token_hash == this_hash,
+                    "session_started_at": r.session_started_at.isoformat() if r.session_started_at else None,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                     "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None})
     return out
@@ -481,15 +563,24 @@ def revoke_session(session_id: int, principal: Principal = Depends(get_principal
 
 
 @router.delete("/sessions")
-def revoke_all_sessions(principal: Principal = Depends(get_principal), db=Depends(get_db)):
+def revoke_all_sessions(principal: Principal = Depends(get_principal),
+                        keep_current: bool = False,
+                        x_refresh_token: str = Header(default=""),
+                        kd_refresh: str | None = Cookie(default=None),
+                        db=Depends(get_db)):
     user = _human(principal)
-    n = (db.query(RefreshToken)
-         .filter(RefreshToken.user_id == user.id, RefreshToken.revoked == 0)
-         .update({"revoked": 1}))
+    q = db.query(RefreshToken).filter(RefreshToken.user_id == user.id,
+                                      RefreshToken.revoked == 0)
+    this = (x_refresh_token or kd_refresh or "").strip()
+    if keep_current and this:
+        q = q.filter(RefreshToken.token_hash != security.hash_refresh_token(this))
+    n = q.update({"revoked": 1})
     db.commit()
     audit.record(db, action="auth.session.revoked_all", actor_email=user.email,
-                 tenant_id=user.tenant_id, detail=f"{n} sessions")
-    return {"revoked": n, "note": "All sessions ended — sign in again."}
+                 tenant_id=user.tenant_id,
+                 detail=f"{n} sessions{' (kept current)' if keep_current else ''}")
+    return {"revoked": n,
+            "note": "Other sessions ended." if keep_current else "All sessions ended — sign in again."}
 
 
 # ── shared internals ────────────────────────────────────────────

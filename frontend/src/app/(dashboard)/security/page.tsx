@@ -10,6 +10,7 @@ import {
   mfaSetup,
   resendVerification,
   revokeAllSessions,
+  revokeOtherSessions,
   revokeSession,
 } from "@/lib/api/auth";
 import { useAuth } from "@/lib/auth/AuthProvider";
@@ -149,31 +150,46 @@ function SessionsCard({ toast }: { toast: Toast }) {
   if (!rows) return <Loading />;
   return (
     <Card title="Active sessions">
+      <p className="small muted" style={{ marginTop: 0 }}>
+        Sessions time out after inactivity and cannot outlive the workspace&apos;s maximum age.
+      </p>
       {rows.length === 0 ? (
         <Empty>No active sessions.</Empty>
       ) : (
-        <TableWrap head={<><th>Device</th><th>IP</th><th>Started</th><th>Last used</th><th /></>}>
+        <TableWrap head={<><th>Device</th><th>IP</th><th>Session start</th><th>Last active</th><th /></>}>
           {rows.map((r) => (
             <tr key={r.id}>
-              <td className="small">{r.label || r.user_agent || "unknown"}</td>
+              <td className="small">
+                {r.label || r.user_agent || "unknown"}
+                {r.current && <span className="badge blue" style={{ marginLeft: 6 }}>This device</span>}
+              </td>
               <td className="small mono">{r.ip || "—"}</td>
-              <td className="small muted">{fmtDate(r.created_at)}</td>
-              <td className="small muted">{fmtDate(r.last_used_at)}</td>
+              <td className="small muted">{fmtDate(r.session_started_at)}</td>
+              <td className="small muted">{fmtDate(r.last_used_at || r.created_at)}</td>
               <td>
-                <button className="btn danger sm" aria-label="Revoke"
-                  onClick={() => revokeSession(r.id).then(load).catch((e) => toast(e.message, "error"))}>
-                  <IconTrash />
-                </button>
+                {!r.current && (
+                  <button className="btn danger sm" aria-label="Revoke"
+                    onClick={() => revokeSession(r.id).then(load).catch((e) => toast(e.message, "error"))}>
+                    <IconTrash />
+                  </button>
+                )}
               </td>
             </tr>
           ))}
         </TableWrap>
       )}
-      <button className="btn ghost" style={{ marginTop: 10 }} onClick={() =>
-        revokeAllSessions().then(() => { toast("All sessions ended", "success"); window.location.href = "/login"; })
-          .catch((e) => toast(e.message, "error"))}>
-        Sign out everywhere
-      </button>
+      <div className="row" style={{ marginTop: 10 }}>
+        <button className="btn secondary" onClick={() =>
+          revokeOtherSessions().then((r) => { toast(`Ended ${r.revoked} other session(s)`, "success"); load(); })
+            .catch((e) => toast(e.message, "error"))}>
+          Sign out other sessions
+        </button>
+        <button className="btn ghost" onClick={() =>
+          revokeAllSessions().then(() => { toast("All sessions ended", "success"); window.location.href = "/login"; })
+            .catch((e) => toast(e.message, "error"))}>
+          Sign out everywhere
+        </button>
+      </div>
     </Card>
   );
 }

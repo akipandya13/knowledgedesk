@@ -87,7 +87,7 @@ def _connector_overrides(conn: ModelConnector, kind: str) -> dict[str, Any]:
     dict can carry both an LLM and an embedding connector at once.
     """
     cfg = dict(conn.config_json or {})
-    sec = decrypt_secrets(conn.secret_encrypted)
+    sec = decrypt_secrets(conn.secret_encrypted, resolve=True)  # resolve ${provider:...} refs at runtime
     if kind == "llm":
         out: dict[str, Any] = {
             "llm_provider": conn.provider,

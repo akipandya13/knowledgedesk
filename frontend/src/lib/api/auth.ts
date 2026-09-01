@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch } from "./client";
+import { getRefresh } from "@/lib/auth/tokenStore";
 import type { AuthSession, CurrentUser, LoginResult, TokenPair } from "@/lib/types";
 
 export function login(email: string, password: string) {
@@ -63,11 +64,20 @@ export const mfaRegenCodes = () =>
   apiFetch<{ recovery_codes: string[]; note: string }>("/auth/mfa/recovery-codes", { method: "POST" });
 
 // ── sessions ─────────────────────────────────────────────────────
-export const listSessions = () => apiFetch<AuthSession[]>("/auth/sessions");
+const _rt = () => ({ "X-Refresh-Token": getRefresh() });
+
+export const listSessions = () =>
+  apiFetch<AuthSession[]>("/auth/sessions", { headers: _rt() });
 export const revokeSession = (id: number) =>
   apiFetch<{ revoked: number }>(`/auth/sessions/${id}`, { method: "DELETE" });
+export const revokeOtherSessions = () =>
+  apiFetch<{ revoked: number; note: string }>("/auth/sessions?keep_current=true", {
+    method: "DELETE", headers: _rt(),
+  });
 export const revokeAllSessions = () =>
-  apiFetch<{ revoked: number; note: string }>("/auth/sessions", { method: "DELETE" });
+  apiFetch<{ revoked: number; note: string }>("/auth/sessions", {
+    method: "DELETE", headers: _rt(),
+  });
 
 // ── SSO ──────────────────────────────────────────────────────────
 export const ssoLookup = (email: string) =>

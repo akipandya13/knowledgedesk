@@ -65,6 +65,8 @@ Permissions are named from the RBAC model in
 | 28 | [Embedding lock](28-embedding-lock.md) |
 | 29 | [Laptop-safe mode & heavy-model guard](29-laptop-safe-mode.md) |
 | 30 | [Credential encryption](30-credential-encryption.md) |
+| 48 | [Secrets management](48-secrets-management.md) — pluggable secret sources for every subsystem |
+| 47 | [Encryption at rest](47-encryption-at-rest.md) — envelope KEK/DEK, encrypted transcript + vectors |
 
 ## Analytics & operations
 
@@ -73,6 +75,7 @@ Permissions are named from the RBAC model in
 | 31 | [Workspace insights](31-workspace-insights.md) |
 | 32 | [Query history](32-query-history.md) |
 | 33 | [Audit log](33-audit-log.md) |
+| 49 | [Security event logging](49-security-event-logging.md) — audit + SIEM stream, authz denials, pw expiry |
 | 34 | [Platform administration](34-platform-administration.md) |
 | 35 | [Collections view](35-collections-view.md) |
 | 36 | [Enterprise readiness view](36-enterprise-readiness.md) |
@@ -86,3 +89,4 @@ Permissions are named from the RBAC model in
 |---|------------|
 | 39 | [Web client architecture](39-web-client-architecture.md) |
 | 40 | [Navigation & route guards](40-navigation-and-route-guards.md) |
+| 46 | [TLS & reverse proxy](46-tls-and-reverse-proxy.md) — HTTPS termination, HSTS, forwarded headers |

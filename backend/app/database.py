@@ -12,6 +12,7 @@ from sqlalchemy import (create_engine, Column, Integer, String, Float, Text,
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 from .config import get_settings
+from .crypto import EncryptedJSON, EncryptedText
 
 settings = get_settings()
 os.makedirs(settings.data_dir, exist_ok=True)
@@ -187,6 +188,7 @@ class User(Base):
                        index=True)                       # NULL for superadmin
     is_active = Column(Integer, default=1)               # soft disable
     password_version = Column(Integer, default=1)        # bump → all JWTs invalid
+    password_changed_at = Column(DateTime, default=utcnow)  # for AUTH_PW_MAX_AGE_DAYS
     force_password_change = Column(Integer, default=0)
     failed_logins = Column(Integer, default=0)
     locked_until = Column(DateTime, nullable=True)
@@ -213,6 +215,7 @@ class RefreshToken(Base):
     ip = Column(String, default="")
     label = Column(String, default="")
     last_used_at = Column(DateTime, nullable=True)
+    session_started_at = Column(DateTime, default=utcnow)  # chain origin; survives rotation
     created_at = Column(DateTime, default=utcnow)
 
 
@@ -223,7 +226,7 @@ class AuditLog(Base):
     actor_email = Column(String, default="")
     actor_role = Column(String, default="")
     action = Column(String, index=True)                  # e.g. auth.login, doc.delete
-    detail = Column(Text, default="")
+    detail = Column(EncryptedText, default="")           # encrypted at rest
     created_at = Column(DateTime, default=utcnow)
 
 
@@ -232,12 +235,13 @@ class QueryLog(Base):
     id = Column(Integer, primary_key=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id"), index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
-    question = Column(Text)
-    answer = Column(Text)
+    # The Q&A transcript is the most sensitive content in this DB → encrypted.
+    question = Column(EncryptedText)
+    answer = Column(EncryptedText)
     mode = Column(String, default="llm")                    # llm | extractive | not_found
     confidence = Column(Float, default=0.0)                 # top retrieval score
     latency_ms = Column(Integer, default=0)
-    sources_json = Column(JSON, default=list)
+    sources_json = Column(EncryptedJSON, default=list)
     filters_json = Column(JSON, default=dict)
     cost_estimate_usd = Column(Float, default=0.0)
     feedback = Column(Integer, nullable=True)               # 1 = helpful, -1 = not helpful
@@ -441,10 +445,12 @@ def init_db() -> None:
     _add_column_if_missing("users", "mfa_secret_encrypted", "mfa_secret_encrypted TEXT DEFAULT ''")
     _add_column_if_missing("users", "mfa_recovery_hashes", "mfa_recovery_hashes JSON DEFAULT '[]'")
     _add_column_if_missing("users", "auth_provider", "auth_provider VARCHAR DEFAULT 'password'")
+    _add_column_if_missing("users", "password_changed_at", "password_changed_at DATETIME")
     _add_column_if_missing("refresh_tokens", "user_agent", "user_agent VARCHAR DEFAULT ''")
     _add_column_if_missing("refresh_tokens", "ip", "ip VARCHAR DEFAULT ''")
     _add_column_if_missing("refresh_tokens", "label", "label VARCHAR DEFAULT ''")
     _add_column_if_missing("refresh_tokens", "last_used_at", "last_used_at DATETIME")
+    _add_column_if_missing("refresh_tokens", "session_started_at", "session_started_at DATETIME")
 
 
 def new_api_key() -> str:

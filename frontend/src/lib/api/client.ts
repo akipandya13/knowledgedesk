@@ -31,6 +31,8 @@ interface RequestOpts {
   raw?: boolean;
   /** Do not attempt a token refresh on 401 (used by the refresh call itself). */
   noRetry?: boolean;
+  /** Extra request headers (merged after the defaults). */
+  headers?: Record<string, string>;
   signal?: AbortSignal;
 }
 
@@ -84,6 +86,7 @@ export async function apiFetch<T = unknown>(
     const token = getAccess();
     if (token) headers["Authorization"] = `Bearer ${token}`;
   }
+  if (opts.headers) Object.assign(headers, opts.headers);
 
   const init: RequestInit = { method, headers, signal };
   if (body !== undefined) init.body = isForm ? (body as FormData) : JSON.stringify(body);

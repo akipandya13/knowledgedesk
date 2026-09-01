@@ -164,6 +164,7 @@ export function DataConnectorModal({ open, onClose, onSaved, providers, editing 
           })}
 
           {spec.secret_note && <div className="hint">{spec.secret_note}</div>}
+          <div className="hint">Tip: any secret field may be a store reference &mdash; <span className="mono">{"${env:NAME}"}</span>, <span className="mono">{"${file:/run/secrets/x}"}</span> or <span className="mono">{"${vault:path#key}"}</span> &mdash; instead of the literal value.</div>
         </>
       )}
 

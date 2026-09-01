@@ -10,6 +10,8 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import observability as obs
 from .auth import get_db, tenant_ctx
@@ -18,6 +20,7 @@ from .database import (DOC_SCOPE_TENANT, Document, SessionLocal, Tenant, User,
                        init_db)
 from .observability.middleware import ObservabilityMiddleware
 from .rbac import Permission
+from .secret_resolver import available_providers, resolve_secret
 from .routers import access, admin, connectors, documents, query, sso
 from .routers import auth_routes, observability as observability_router, users as users_router
 from .services import llm, vectorstore
@@ -41,6 +44,15 @@ app.add_middleware(CORSMiddleware, allow_origins=_cors or ["*"], allow_methods=[
 # Observability is initialised before the middleware records anything.
 obs.setup(settings)
 app.add_middleware(ObservabilityMiddleware)
+
+# ── Edge hardening (added last → evaluated first) ───────────────────
+_hosts = [h.strip() for h in (settings.trusted_hosts or "*").split(",") if h.strip()]
+if _hosts and _hosts != ["*"]:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_hosts)
+if settings.force_https_redirect:
+    # Normally the reverse proxy (Caddy) does this; enable only when the app is
+    # directly internet-facing. Relies on uvicorn --proxy-headers.
+    app.add_middleware(HTTPSRedirectMiddleware)
 
 # ── Routers ─────────────────────────────────────────────────────────
 app.include_router(auth_routes.router)
@@ -76,14 +88,14 @@ def _bootstrap_db(db) -> None:
         superadmin = User(
             email=s.superadmin_email,
             full_name="Platform Administrator",
-            password_hash=security.hash_password(s.superadmin_password),
+            password_hash=security.hash_password(resolve_secret(s.superadmin_password)),
             role="superadmin",
             tenant_id=None,
-            force_password_change=1,
+            force_password_change=1 if s.superadmin_force_password_change else 0,
         )
         db.add(superadmin)
         db.commit()
-        log.info("Superadmin created: %s (change password on first login)", s.superadmin_email)
+        log.info("Superadmin created: %s", s.superadmin_email)
 
     # 2. Demo tenant
     if s.demo_tenant_enabled:
@@ -95,29 +107,27 @@ def _bootstrap_db(db) -> None:
             db.commit()
             log.info("Demo tenant created (API key: %s)", s.demo_tenant_api_key)
 
-        # 3. Demo users (only when demo_users_enabled)
+        # 3. Demo users — one per workspace role (only when demo_users_enabled)
         if s.demo_users_enabled:
-            demo_admin_email = "admin@demo.knowledgedesk.local"
-            if not db.query(User).filter(User.email == demo_admin_email).first():
+            if not db.query(User).filter(User.email == s.demo_admin_email).first():
                 db.add(User(
-                    email=demo_admin_email, full_name="Demo Admin",
-                    password_hash=security.hash_password("Demo-Admin123!"),
+                    email=s.demo_admin_email, full_name="Demo Admin",
+                    password_hash=security.hash_password(resolve_secret(s.demo_admin_password)),
                     role="tenant_admin", tenant_id=demo_tenant.id,
                     force_password_change=0,
                 ))
                 db.commit()
-                log.info("Demo tenant_admin: %s / Demo-Admin123!", demo_admin_email)
+                log.info("Demo tenant_admin: %s", s.demo_admin_email)
 
-            demo_member_email = "employee@demo.knowledgedesk.local"
-            if not db.query(User).filter(User.email == demo_member_email).first():
+            if not db.query(User).filter(User.email == s.demo_member_email).first():
                 db.add(User(
-                    email=demo_member_email, full_name="Demo Employee",
-                    password_hash=security.hash_password("Demo-User123!"),
+                    email=s.demo_member_email, full_name="Demo Member",
+                    password_hash=security.hash_password(resolve_secret(s.demo_member_password)),
                     role="member", tenant_id=demo_tenant.id,
                     force_password_change=0,
                 ))
                 db.commit()
-                log.info("Demo member: %s / Demo-User123!", demo_member_email)
+                log.info("Demo member: %s", s.demo_member_email)
 
 
 def _enforce_safe_model_defaults(db) -> None:
@@ -228,8 +238,9 @@ def startup() -> None:
             _health_task = asyncio.get_running_loop().create_task(_health_probe_loop(period))
         except RuntimeError:
             log.warning("observability: no running loop at startup; health probe disabled")
-    log.info("%s ready — LLM=%s/%s, embeddings=%s", settings.app_name,
-             settings.llm_provider, settings.llm_model, settings.embedding_provider)
+    log.info("%s ready — LLM=%s/%s, embeddings=%s | secret providers: %s",
+             settings.app_name, settings.llm_provider, settings.llm_model,
+             settings.embedding_provider, ", ".join(available_providers()))
 
 
 @app.on_event("shutdown")

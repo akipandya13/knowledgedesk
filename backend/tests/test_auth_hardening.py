@@ -198,6 +198,18 @@ def test_sso_config_requires_entitlement(client, make_world):
     assert look["available"] is True and look["entitled"] is True
 
 
+def test_public_base_url_drives_sso_redirect_and_links(monkeypatch):
+    from app.config import get_settings
+    from app.routers.sso import _callback_uri
+    from app import authn
+
+    s = get_settings()
+    monkeypatch.setattr(s, "public_base_url", "https://kd.example.com")
+    assert s.app_base_url == "https://kd.example.com"
+    assert _callback_uri(None) == "https://kd.example.com/api/auth/sso/callback"
+    assert authn.link("/verify-email?token=x") == "https://kd.example.com/verify-email?token=x"
+
+
 def test_sso_start_redirects_to_idp(client, make_world, monkeypatch):
     w = make_world()
     db = SessionLocal()

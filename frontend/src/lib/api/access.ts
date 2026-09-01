@@ -82,6 +82,10 @@ export const effectiveFor = (userId: number) =>
     `/access/effective/${userId}`,
   );
 
+// ── secret providers ──────────────────────────────────────────
+export const getSecretProviders = () =>
+  apiFetch<{ providers: string[]; syntax: string; examples: string[] }>("/access/secrets");
+
 // ── authentication policy ──────────────────────────────────────
 export const getAuthPolicy = () => apiFetch<AuthPolicy>("/access/auth-policy");
 export const setAuthPolicy = (body: { mfa_required?: boolean; require_verified_email?: boolean }) =>

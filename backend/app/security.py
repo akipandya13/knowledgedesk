@@ -48,7 +48,8 @@ def jwt_secret() -> str:
         return _secret_cache
     s = get_settings()
     if s.jwt_secret:
-        _secret_cache = s.jwt_secret
+        from .secret_resolver import resolve_secret
+        _secret_cache = resolve_secret(s.jwt_secret)
         return _secret_cache
     path = Path(s.data_dir) / ".jwt_secret"
     if path.exists():

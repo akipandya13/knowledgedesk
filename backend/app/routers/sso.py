@@ -39,7 +39,11 @@ router = APIRouter(prefix="/api/auth/sso", tags=["auth"])
 
 
 def _callback_uri(request: Request) -> str:
-    # Same host the browser used; the IdP must have this registered.
+    """The redirect URI registered with the IdP. Prefer the configured public
+    origin (correct behind the TLS proxy); fall back to the request's own URL."""
+    base = get_settings().public_base_url.strip().rstrip("/")
+    if base:
+        return f"{base}/api/auth/sso/callback"
     return str(request.url_for("sso_callback"))
 
 
@@ -117,7 +121,7 @@ def start(request: Request, workspace: str, db=Depends(get_db)):
 @router.get("/callback", name="sso_callback")
 def callback(request: Request, code: str | None = None, state: str | None = None,
              error: str | None = None, db=Depends(get_db)):
-    front = get_settings().email_public_base_url.rstrip("/")
+    front = get_settings().app_base_url
     if error or not code or not state:
         return RedirectResponse(f"{front}/login?sso_error={error or 'cancelled'}", status_code=302)
 
@@ -135,7 +139,7 @@ def callback(request: Request, code: str | None = None, state: str | None = None
     if not conn or not tenant or not authn.entitlement_enabled(tenant, "sso"):
         return RedirectResponse(f"{front}/login?sso_error=unavailable", status_code=302)
 
-    secret = decrypt_secrets(conn.secret_encrypted).get("client_secret", "")
+    secret = decrypt_secrets(conn.secret_encrypted, resolve=True).get("client_secret", "")
     try:
         disco = authn.oidc_discover(conn.issuer)
         tok = authn.oidc_exchange_code(disco, conn.client_id, secret, code,

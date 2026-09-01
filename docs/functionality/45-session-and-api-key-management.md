@@ -7,17 +7,29 @@ name, expire and revoke multiple hashed API keys per workspace.
 
 ## Sessions
 
-Each successful sign-in stores a refresh token with `user_agent`, `ip`,
-`label`, `created_at`, `last_used_at`.
+Each sign-in starts a refresh-token chain with `user_agent`, `ip`, `label`,
+`session_started_at` (carried across single-use rotation), `created_at`,
+`last_used_at`.
+
+**Lifetime is enforced across rotation**, not per token:
+
+| Control | Setting | Default |
+|---------|---------|---------|
+| Idle timeout — no refresh within the window ends the session | `AUTH_SESSION_IDLE_HOURS` | 72 |
+| Absolute cap — a session cannot outlive this regardless of activity | `AUTH_SESSION_MAX_DAYS` | 30 |
+| Concurrent cap — oldest chain evicted past this | `AUTH_MAX_SESSIONS_PER_USER` | 10 |
 
 | Method | Path | |
 |--------|------|--|
-| GET | `/api/auth/sessions` | list the caller's live sessions |
+| GET | `/api/auth/sessions` | list; send `X-Refresh-Token` to get the `current` marker |
 | DELETE | `/api/auth/sessions/{id}` | revoke one |
+| DELETE | `/api/auth/sessions?keep_current=true` | revoke every *other* session |
 | DELETE | `/api/auth/sessions` | revoke all |
 
-Sessions are also revoked automatically on password change/reset and account
-disable. UI: **Security** page (`/security`).
+Also revoked on password change/reset, account disable, logout, timeout, and
+refresh-token reuse. Timeouts emit `auth.session.timed_out` /
+`auth.session.evicted` observability events. UI: **Security** page (`/security`)
+— shows "This device" and "Sign out other sessions".
 
 ## API keys (v2)
 
