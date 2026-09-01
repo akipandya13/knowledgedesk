@@ -255,20 +255,20 @@ async def _ollama_stream(system: str, user: str, c: dict[str, Any]) -> AsyncIter
         async with h.stream("POST", f"{c['ollama_url']}/api/chat",
                             json=_ollama_body(system, user, stream=True, c=c),
                             timeout=int(c["llm_timeout_seconds"])) as r:
-                if r.status_code >= 400:
-                    detail = await r.aread()
-                    raise LLMUnavailable(f"Ollama /api/chat failed: {r.status_code} {detail.decode(errors='ignore')[:400]}")
-                async for line in r.aiter_lines():
-                    if not line.strip():
-                        continue
-                    data = json.loads(line)
-                    if data.get("error"):
-                        raise LLMUnavailable(f"Ollama returned an error: {data['error']}")
-                    tok = data.get("message", {}).get("content", "")
-                    if tok:
-                        yield tok
-                    if data.get("done"):
-                        break
+            if r.status_code >= 400:
+                detail = await r.aread()
+                raise LLMUnavailable(f"Ollama /api/chat failed: {r.status_code} {detail.decode(errors='ignore')[:400]}")
+            async for line in r.aiter_lines():
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                if data.get("error"):
+                    raise LLMUnavailable(f"Ollama returned an error: {data['error']}")
+                tok = data.get("message", {}).get("content", "")
+                if tok:
+                    yield tok
+                if data.get("done"):
+                    break
     except LLMUnavailable:
         raise
     except (httpx.TimeoutException, httpx.HTTPError, json.JSONDecodeError) as e:
@@ -333,19 +333,19 @@ async def _openai_stream(system: str, user: str, c: dict[str, Any],
         async with h.stream("POST", url, headers=headers or _openai_headers(c),
                             json=_openai_body(system, user, stream=True, c=c),
                             timeout=int(c["llm_timeout_seconds"])) as r:
-                if r.status_code >= 400:
-                    detail = await r.aread()
-                    raise LLMUnavailable(f"Chat completions stream failed: {r.status_code} {detail.decode(errors='ignore')[:400]}")
-                async for line in r.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if payload == "[DONE]":
-                        break
-                    delta = (json.loads(payload)["choices"][0]
-                             .get("delta", {}).get("content"))
-                    if delta:
-                        yield delta
+            if r.status_code >= 400:
+                detail = await r.aread()
+                raise LLMUnavailable(f"Chat completions stream failed: {r.status_code} {detail.decode(errors='ignore')[:400]}")
+            async for line in r.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                delta = (json.loads(payload)["choices"][0]
+                         .get("delta", {}).get("content"))
+                if delta:
+                    yield delta
     except LLMUnavailable:
         raise
     except (httpx.TimeoutException, httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError) as e:

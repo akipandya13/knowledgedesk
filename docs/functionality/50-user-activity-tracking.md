@@ -69,7 +69,10 @@ UI:
 - `/api/admin/activity` → `activity.read` (tenant_admin, service). Superadmin
   has no access to a workspace's activity log.
 - `/api/admin/platform/activity` → `platform.read` (superadmin only).
-- `/api/me/activity` → any authenticated workspace principal (own rows only).
+- `/api/me/activity` → **any authenticated principal** — member, workspace admin,
+  service key *and the platform administrator* (it is self-scoped by
+  `user_id`, not workspace content, so the "no workspace access" rule does not
+  apply; a service key has no `user_id` and gets `[]`).
 
 ## Configuration
 

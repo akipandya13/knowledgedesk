@@ -207,6 +207,16 @@ def test_me_activity_only_shows_own_rows(client, make_world):
     assert all(r["actor"] == f"alice@{w['slug']}.test" for r in rows)
 
 
+def test_me_activity_is_open_to_superadmin_and_service(client, make_world):
+    """The self-service view is *not* workspace content — it must not 403 the
+    platform admin (regression: it used to, via require_member)."""
+    w = make_world()
+    r = client.get("/api/me/activity", headers=w["superadmin"])
+    assert r.status_code == 200                       # was 403 "no workspace content"
+    # a service key has no user_id → empty, but still 200
+    assert client.get("/api/me/activity", headers=w["service"]).json() == []
+
+
 # ── retention purge ───────────────────────────────────────────────
 
 def test_purge_logs_trims_old_activity_only(client, make_world):

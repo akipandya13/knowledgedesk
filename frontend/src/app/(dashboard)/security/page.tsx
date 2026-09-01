@@ -46,16 +46,15 @@ export default function SecurityPage() {
 }
 
 function MyActivityCard({ toast }: { toast: Toast }) {
+  void toast;
   const [rows, setRows] = useState<ActivityEntry[] | null>(null);
 
   useEffect(() => {
+    // Best-effort — a transparency panel, never a reason to error the page.
     getMyActivity({ limit: 25 })
       .then(setRows)
-      .catch((e) => {
-        setRows([]);
-        toast(e.message, "error");
-      });
-  }, [toast]);
+      .catch(() => setRows([]));
+  }, []);
 
   return (
     <Card title="My recent activity" style={{ marginBottom: 16 }}>

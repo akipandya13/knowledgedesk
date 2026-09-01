@@ -75,7 +75,12 @@ export default function ObservabilityPage() {
   const [spans, setSpans] = useState<ObsSpan[] | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([getObsConfig(), getMetricsSnapshot(), getObsEvents({ limit: 60 }), getSlo()])
+    Promise.all([
+      getObsConfig(),
+      getMetricsSnapshot(),
+      getObsEvents({ limit: 60 }),
+      getSlo().catch(() => null), // non-fatal — don't let the SLO call break the page
+    ])
       .then(([c, s, e, sl]) => {
         setCfg(c);
         setSnap(s);
