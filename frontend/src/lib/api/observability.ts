@@ -1,10 +1,14 @@
 "use client";
 
 import { apiFetch } from "./client";
-import type { MetricsSnapshot, ObsConfig, ObsEvent, ObsSpan } from "@/lib/types";
+import type { MetricsSnapshot, ObsConfig, ObsEvent, ObsSpan, SloReport } from "@/lib/types";
 
 export function getObsConfig() {
   return apiFetch<ObsConfig>("/observability/config");
+}
+
+export function getSlo() {
+  return apiFetch<SloReport>("/observability/slo");
 }
 
 export function getMetricsSnapshot() {

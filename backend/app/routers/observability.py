@@ -38,6 +38,13 @@ def observability_config(principal: Principal = Depends(_guard)) -> dict:
     return obs.config_view()
 
 
+@router.get("/slo")
+def observability_slo(principal: Principal = Depends(_guard)) -> dict:
+    """Response-time targets vs. the current p50/p95, from the live registry."""
+    from ..observability.slo import slo_report
+    return slo_report()
+
+
 @router.get("/metrics")
 def metrics_snapshot(principal: Principal = Depends(_guard)) -> dict:
     snap = obs.snapshot()

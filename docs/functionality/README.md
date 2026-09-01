@@ -86,6 +86,7 @@ Permissions are named from the RBAC model in
 | 51 | [Application logging](51-application-logging.md) — structured JSON logs, correlation ids, error handler, centralized collection (Postgres/Mongo) |
 | 52 | [Resilience & recovery](52-resilience-and-recovery.md) — timeouts, retries, idempotency, startup reconciler, error isolation |
 | 53 | [Backup & restore](53-backup-and-restore.md) — consistent DB + keys + Qdrant snapshots |
+| 54 | [Performance & caching](54-performance-and-caching.md) — DB pool + indexes, tenant-config cache, pooled HTTP, response-time targets |
 
 ## Architecture
 

@@ -22,6 +22,7 @@ import httpx
 
 from .. import observability as obs
 from ..config import get_settings
+from ..http_client import get_client
 from ..model_catalog import model_warning
 
 _models: dict[str, object] = {}
@@ -157,22 +158,22 @@ def _embed_oai_compatible(texts: List[str], model: str, base_url: str,
                           api_key: str) -> List[List[float]]:
     out: List[List[float]] = []
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    with httpx.Client(timeout=60) as client:
-        for i in range(0, len(texts), 100):
-            batch = texts[i:i + 100]
-            r = client.post(f"{base_url.rstrip('/')}/embeddings", headers=headers,
-                            json={"model": model, "input": batch})
-            r.raise_for_status()
-            out.extend(item["embedding"] for item in r.json()["data"])
+    client = get_client()
+    for i in range(0, len(texts), 100):
+        batch = texts[i:i + 100]
+        r = client.post(f"{base_url.rstrip('/')}/embeddings", headers=headers,
+                        json={"model": model, "input": batch}, timeout=60)
+        r.raise_for_status()
+        out.extend(item["embedding"] for item in r.json()["data"])
     return out
 
 
 def _embed_ollama(texts: List[str], model: str, base_url: str) -> List[List[float]]:
     url = f"{base_url.rstrip('/')}/api/embed"
-    with httpx.Client(timeout=120) as client:
-        r = client.post(url, json={"model": model, "input": texts})
-        r.raise_for_status()
-        data = r.json()
+    client = get_client()
+    r = client.post(url, json={"model": model, "input": texts}, timeout=120)
+    r.raise_for_status()
+    data = r.json()
     embs = data.get("embeddings")
     if not embs:
         raise EmbeddingError(f"Ollama returned no embeddings for model '{model}'.")
@@ -188,12 +189,12 @@ def _embed_azure(texts: List[str], runtime: dict[str, Any]) -> List[List[float]]
         raise EmbeddingError("Azure embedding connector is missing endpoint, deployment, api_version, or api_key.")
     url = f"{endpoint}/openai/deployments/{deployment}/embeddings?api-version={version}"
     out: List[List[float]] = []
-    with httpx.Client(timeout=60) as client:
-        for i in range(0, len(texts), 100):
-            batch = texts[i:i + 100]
-            r = client.post(url, headers={"api-key": key}, json={"input": batch})
-            r.raise_for_status()
-            out.extend(item["embedding"] for item in r.json()["data"])
+    client = get_client()
+    for i in range(0, len(texts), 100):
+        batch = texts[i:i + 100]
+        r = client.post(url, headers={"api-key": key}, json={"input": batch}, timeout=60)
+        r.raise_for_status()
+        out.extend(item["embedding"] for item in r.json()["data"])
     return out
 
 

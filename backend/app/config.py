@@ -218,6 +218,24 @@ class Settings(BaseSettings):
     # including postgres/mongodb above — without duplicating the concern.
     log_bridge_level: str = "WARNING"
 
+    # ── Performance: DB pool, caching, response-time targets ───────
+    # See docs/PERFORMANCE.md.
+    database_url: str = ""                     # blank → sqlite at {DATA_DIR}/knowledgedesk.db
+    db_pool_size: int = 5                      # applies to a networked DB (Postgres); SQLite pools cheaply
+    db_max_overflow: int = 10
+    db_pool_timeout: int = 30                  # seconds to wait for a pooled connection
+    db_pool_recycle: int = 1800               # recycle a connection after N seconds (stale-conn guard)
+    db_pool_pre_ping: bool = True             # validate a pooled connection before use
+    sqlite_cache_mb: int = 16                  # per-connection page cache
+    tenant_config_cache_ttl: int = 30          # seconds to cache resolve_model_config() per tenant; 0 disables
+    http_pool_max_connections: int = 100       # shared outbound httpx client (LLM / embeddings / connectors)
+    http_pool_max_keepalive: int = 20
+    # Response-time targets (p95). Surfaced at GET /api/observability/slo and as
+    # slo.* gauges for alerting. Demo defaults — tune per deployment.
+    slo_api_p95_ms: int = 500                  # non-RAG API requests
+    slo_rag_answer_p95_ms: int = 15000         # end-to-end grounded answer
+    slo_ingest_doc_p95_ms: int = 60000         # per-document ingestion
+
     # ── Resilience: timeouts, retries, idempotency, recovery ───────
     # See docs/RESILIENCE.md.
     request_timeout_seconds: int = 60          # hard cap per HTTP request; 0 disables

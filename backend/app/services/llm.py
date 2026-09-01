@@ -22,6 +22,7 @@ import httpx
 
 from .. import observability as obs
 from ..config import get_settings
+from ..http_client import get_async_client
 from ..model_catalog import LARGE_OLLAMA_MODELS, SAFE_DEMO_OLLAMA_MODELS
 
 log = logging.getLogger("knowledgedesk.llm")
@@ -131,10 +132,10 @@ def _name_variants(model: str) -> set[str]:
 
 
 async def _ollama_tags(c: dict[str, Any]) -> set[str]:
-    async with httpx.AsyncClient(timeout=10) as h:
-        r = await h.get(f"{c['ollama_url']}/api/tags")
-        r.raise_for_status()
-        payload = r.json()
+    h = get_async_client()
+    r = await h.get(f"{c['ollama_url']}/api/tags", timeout=10)
+    r.raise_for_status()
+    payload = r.json()
     return {m.get("name", "") for m in payload.get("models", []) if m.get("name")}
 
 
@@ -233,13 +234,14 @@ def _ollama_body(system: str, user: str, stream: bool, c: dict[str, Any]) -> dic
 async def _ollama(system: str, user: str, c: dict[str, Any]) -> str:
     await _ensure_ollama_ready(c)
     try:
-        async with httpx.AsyncClient(timeout=int(c["llm_timeout_seconds"])) as h:
-            r = await h.post(f"{c['ollama_url']}/api/chat",
-                             json=_ollama_body(system, user, stream=False, c=c))
-            if r.status_code >= 400:
-                raise LLMUnavailable(f"Ollama /api/chat failed: {r.status_code} {r.text[:400]}")
-            data = r.json()
-            return data["message"]["content"].strip()
+        h = get_async_client()
+        r = await h.post(f"{c['ollama_url']}/api/chat",
+                         json=_ollama_body(system, user, stream=False, c=c),
+                         timeout=int(c["llm_timeout_seconds"]))
+        if r.status_code >= 400:
+            raise LLMUnavailable(f"Ollama /api/chat failed: {r.status_code} {r.text[:400]}")
+        data = r.json()
+        return data["message"]["content"].strip()
     except LLMUnavailable:
         raise
     except (httpx.TimeoutException, httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
@@ -249,9 +251,10 @@ async def _ollama(system: str, user: str, c: dict[str, Any]) -> str:
 async def _ollama_stream(system: str, user: str, c: dict[str, Any]) -> AsyncIterator[str]:
     await _ensure_ollama_ready(c)
     try:
-        async with httpx.AsyncClient(timeout=int(c["llm_timeout_seconds"])) as h:
-            async with h.stream("POST", f"{c['ollama_url']}/api/chat",
-                                json=_ollama_body(system, user, stream=True, c=c)) as r:
+        h = get_async_client()
+        async with h.stream("POST", f"{c['ollama_url']}/api/chat",
+                            json=_ollama_body(system, user, stream=True, c=c),
+                            timeout=int(c["llm_timeout_seconds"])) as r:
                 if r.status_code >= 400:
                     detail = await r.aread()
                     raise LLMUnavailable(f"Ollama /api/chat failed: {r.status_code} {detail.decode(errors='ignore')[:400]}")
@@ -309,12 +312,13 @@ async def _openai(system: str, user: str, c: dict[str, Any],
                   url: str | None = None, headers: dict | None = None) -> str:
     url = url or f"{c['openai_base_url']}/chat/completions"
     try:
-        async with httpx.AsyncClient(timeout=int(c["llm_timeout_seconds"])) as h:
-            r = await h.post(url, headers=headers or _openai_headers(c),
-                             json=_openai_body(system, user, stream=False, c=c))
-            if r.status_code >= 400:
-                raise LLMUnavailable(f"Chat completions failed: {r.status_code} {r.text[:400]}")
-            return r.json()["choices"][0]["message"]["content"].strip()
+        h = get_async_client()
+        r = await h.post(url, headers=headers or _openai_headers(c),
+                         json=_openai_body(system, user, stream=False, c=c),
+                         timeout=int(c["llm_timeout_seconds"]))
+        if r.status_code >= 400:
+            raise LLMUnavailable(f"Chat completions failed: {r.status_code} {r.text[:400]}")
+        return r.json()["choices"][0]["message"]["content"].strip()
     except LLMUnavailable:
         raise
     except (httpx.TimeoutException, httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as e:
@@ -325,9 +329,10 @@ async def _openai_stream(system: str, user: str, c: dict[str, Any],
                          url: str | None = None, headers: dict | None = None) -> AsyncIterator[str]:
     url = url or f"{c['openai_base_url']}/chat/completions"
     try:
-        async with httpx.AsyncClient(timeout=int(c["llm_timeout_seconds"])) as h:
-            async with h.stream("POST", url, headers=headers or _openai_headers(c),
-                                json=_openai_body(system, user, stream=True, c=c)) as r:
+        h = get_async_client()
+        async with h.stream("POST", url, headers=headers or _openai_headers(c),
+                            json=_openai_body(system, user, stream=True, c=c),
+                            timeout=int(c["llm_timeout_seconds"])) as r:
                 if r.status_code >= 400:
                     detail = await r.aread()
                     raise LLMUnavailable(f"Chat completions stream failed: {r.status_code} {detail.decode(errors='ignore')[:400]}")

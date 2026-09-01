@@ -148,16 +148,8 @@ def _connector_overrides(conn: ModelConnector, kind: str) -> dict[str, Any]:
 connector_overrides = _connector_overrides
 
 
-def resolve_model_config(tenant: Tenant | None, db=None) -> dict[str, Any]:
-    """effective_settings + any selected LLM/embedding connector overrides.
-
-    The returned dict is a drop-in replacement for effective_settings() at every
-    call site: when no connector is selected it is byte-for-byte the same.
-    """
+def _resolve_model_config_uncached(tenant: Tenant, db=None) -> dict[str, Any]:
     cfg = effective_settings(tenant)
-    if not tenant:
-        return cfg
-
     owns_session = db is None
     db = db or SessionLocal()
     try:
@@ -173,6 +165,28 @@ def resolve_model_config(tenant: Tenant | None, db=None) -> dict[str, Any]:
         if owns_session:
             db.close()
     return cfg
+
+
+def resolve_model_config(tenant: Tenant | None, db=None) -> dict[str, Any]:
+    """effective_settings + any selected LLM/embedding connector overrides.
+
+    The returned dict is a drop-in replacement for effective_settings() at every
+    call site: when no connector is selected it is byte-for-byte the same.
+
+    Cached per (tenant id, settings_json) for TENANT_CONFIG_CACHE_TTL seconds —
+    this runs on every query/ingest and, with a connector selected, opens a
+    session + may resolve a ${secret:…} over the network. A settings edit yields
+    a fresh key automatically; connector CRUD invalidates explicitly.
+    """
+    if not tenant:
+        return effective_settings(None)
+
+    import json as _json
+    from .cache import tenant_config_cache
+    key = (tenant.id, _json.dumps(tenant.settings_json or {}, sort_keys=True, default=str))
+    cached = tenant_config_cache().get_or_set(
+        key, lambda: _resolve_model_config_uncached(tenant, db))
+    return dict(cached)             # defensive copy — callers mutate the result
 
 
 def embedding_locked(tenant: Tenant | None, db) -> bool:

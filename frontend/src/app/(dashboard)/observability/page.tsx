@@ -5,9 +5,10 @@ import {
   getMetricsSnapshot,
   getObsConfig,
   getObsEvents,
+  getSlo,
   getTrace,
 } from "@/lib/api/observability";
-import type { Metric, MetricsSnapshot, ObsConfig, ObsEvent, ObsSpan } from "@/lib/types";
+import type { Metric, MetricsSnapshot, ObsConfig, ObsEvent, ObsSpan, SloReport } from "@/lib/types";
 import { Card, Empty, Loading, Notice, PageHeader, StatCard, TableWrap } from "@/components/ui";
 import { useToast } from "@/components/Toast";
 
@@ -69,15 +70,17 @@ export default function ObservabilityPage() {
   const [cfg, setCfg] = useState<ObsConfig | null>(null);
   const [snap, setSnap] = useState<MetricsSnapshot | null>(null);
   const [events, setEvents] = useState<ObsEvent[]>([]);
+  const [slo, setSlo] = useState<SloReport | null>(null);
   const [traceId, setTraceId] = useState("");
   const [spans, setSpans] = useState<ObsSpan[] | null>(null);
 
   const load = useCallback(() => {
-    Promise.all([getObsConfig(), getMetricsSnapshot(), getObsEvents({ limit: 60 })])
-      .then(([c, s, e]) => {
+    Promise.all([getObsConfig(), getMetricsSnapshot(), getObsEvents({ limit: 60 }), getSlo()])
+      .then(([c, s, e, sl]) => {
         setCfg(c);
         setSnap(s);
         setEvents(e.events);
+        setSlo(sl);
       })
       .catch((err) => toast(err instanceof Error ? err.message : "Load failed", "error"));
   }, [toast]);
@@ -204,6 +207,44 @@ export default function ObservabilityPage() {
           Probes: <span className="mono">/livez</span> (liveness) · <span className="mono">/readyz</span> (readiness, 503 when a required dependency is down) · <span className="mono">/api/health</span> (detailed).
         </p>
       </Card>
+
+      {slo && (
+        <Card
+          title="Response-time targets (p95)"
+          style={{ marginTop: 16 }}
+        >
+          <div className="chips" style={{ marginBottom: 10 }}>
+            <span
+              className="chip"
+              style={{ cursor: "default", color: slo.ok ? "var(--green)" : "var(--red)" }}
+            >
+              {slo.ok ? "all targets met" : "target breached"}
+            </span>
+          </div>
+          <TableWrap head={<><th>Target</th><th>Budget p95</th><th>p50</th><th>p95</th><th>Samples</th><th /></>}>
+            {slo.targets.map((t) => (
+              <tr key={t.name}>
+                <td className="mono small">{t.name}</td>
+                <td className="small">{t.target_p95_ms} ms</td>
+                <td className="small muted">{t.p50_ms == null ? "—" : `${t.p50_ms} ms`}</td>
+                <td className="small">{t.p95_ms == null ? "—" : `${t.p95_ms} ms`}</td>
+                <td className="small muted">{t.samples}</td>
+                <td>
+                  <span
+                    className={`badge ${t.samples === 0 ? "" : t.met ? "green" : "amber"}`}
+                  >
+                    {t.samples === 0 ? "no data" : t.met ? "met" : "breached"}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </TableWrap>
+          <p className="small muted" style={{ marginTop: 8, marginBottom: 0 }}>
+            Budgets from <span className="mono">SLO_*_P95_MS</span>; also exported as
+            <span className="mono"> slo.compliant</span> / <span className="mono">slo.p95.seconds</span> gauges.
+          </p>
+        </Card>
+      )}
 
       {hasResources && (
         <>

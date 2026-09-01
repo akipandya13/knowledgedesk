@@ -251,9 +251,11 @@ _resource_task: asyncio.Task | None = None
 async def _health_probe_loop(period: int) -> None:
     """Refresh dependency-up gauges + check latency on a timer so monitoring
     sees outages even when no one is using the app."""
+    from .observability.slo import slo_report
     while True:
         try:
             await health.check_dependencies()
+            slo_report(emit=True)              # refresh slo.* gauges for alerting
         except Exception:                       # never let the probe die
             log.exception("observability health probe failed")
         await asyncio.sleep(period)
@@ -296,6 +298,14 @@ def shutdown() -> None:
         if task:
             task.cancel()
     obs.shutdown()
+    from . import http_client
+    http_client.close()
+
+
+@app.on_event("shutdown")
+async def _close_async_resources() -> None:
+    from . import http_client
+    await http_client.aclose()
 
 
 # ── Health / liveness / readiness probes ─────────────────────────────

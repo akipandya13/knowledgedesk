@@ -32,6 +32,7 @@ from ..services import activity as activity_svc
 from ..services import tenants as tenants_svc
 from ..model_catalog import (CONNECTOR_PROVIDERS, MODEL_SETTING_KEYS,
                              SAFE_DEMO_OLLAMA_MODELS, catalog_payload, profile_defaults)
+from ..cache import invalidate_tenant_config
 from ..tenant_settings import (effective_settings, embedding_locked,
                                resolve_model_config, connector_overrides, as_bool)
 from ..services import vectorstore
@@ -176,6 +177,7 @@ def create_connector(req: ConnectorCreate, principal=Depends(require(Permission.
     audit.record(db, action="tenant.model_connector_created", principal=principal,
                  tenant_id=tenant.id, target_type="model_connector", target_id=conn.id,
                  detail=f"{req.kind}:{req.provider}:{conn.model_id}")
+    invalidate_tenant_config(tenant.id)
     return _connector_public(conn)
 
 
@@ -231,6 +233,7 @@ def update_connector(cid: int, req: ConnectorUpdate, principal=Depends(require(P
     audit.record(db, action="tenant.model_connector_updated", principal=principal,
                  tenant_id=tenant.id, target_type="model_connector",
                  target_id=conn.id, changes=changed or None)
+    invalidate_tenant_config(tenant.id)
     return _connector_public(conn)
 
 
@@ -250,6 +253,7 @@ def delete_connector(cid: int, principal=Depends(require(Permission.MODEL_CONNEC
     audit.record(db, action="tenant.model_connector_deleted", principal=principal,
                  tenant_id=tenant.id, target_type="model_connector", target_id=cid,
                  detail=name)
+    invalidate_tenant_config(tenant.id)
     return {"deleted": cid}
 
 
@@ -351,6 +355,7 @@ def update_tenant_settings(req: TenantSettingsUpdate,
                  tenant_id=tenant.id, target_type="workspace_settings",
                  target_id=tenant.id, changes=changed or None,
                  detail="" if changed else "no effective change")
+    invalidate_tenant_config(tenant.id)
     return {"settings": merged, "effective": effective_settings(tenant), "note": safe_note}
 
 

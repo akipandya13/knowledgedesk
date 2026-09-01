@@ -18,22 +18,40 @@ from .crypto import EncryptedJSON, EncryptedText
 settings = get_settings()
 os.makedirs(settings.data_dir, exist_ok=True)
 
-engine = create_engine(
-    f"sqlite:///{settings.data_dir}/knowledgedesk.db",
-    connect_args={"check_same_thread": False},
-)
+_DB_URL = settings.database_url or f"sqlite:///{settings.data_dir}/knowledgedesk.db"
+_IS_SQLITE = _DB_URL.startswith("sqlite")
+
+# One tuned connection pool. For SQLite the pool is cheap but still bounds file
+# handles and lets many reader threads share connections under WAL; for a
+# networked DB (Postgres) these are the parameters that matter — pre-ping and
+# recycle guard against connections killed by the server/proxy.
+_engine_kw: dict = {
+    "pool_pre_ping": settings.db_pool_pre_ping,
+    "pool_recycle": settings.db_pool_recycle,
+}
+if _IS_SQLITE:
+    _engine_kw["connect_args"] = {"check_same_thread": False}
+else:                                            # pragma: no cover - not exercised in CI
+    _engine_kw.update(pool_size=settings.db_pool_size,
+                      max_overflow=settings.db_max_overflow,
+                      pool_timeout=settings.db_pool_timeout)
+
+engine = create_engine(_DB_URL, **_engine_kw)
 
 
 @event.listens_for(engine, "connect")
-def _sqlite_pragmas(dbapi_conn, _rec):
-    """Per-connection resilience: WAL for read/write concurrency, and a bounded
-    wait for a write lock so a brief contention window returns success instead
-    of an immediate 'database is locked'."""
+def _on_connect(dbapi_conn, _rec):
+    """Per-connection tuning. SQLite: WAL + a bounded write-lock wait + a bigger
+    page cache + memory temp store. No-op for other backends."""
+    if not _IS_SQLITE:
+        return
     cur = dbapi_conn.cursor()
     try:
         cur.execute(f"PRAGMA busy_timeout={int(settings.sqlite_busy_timeout_ms)}")
         cur.execute("PRAGMA journal_mode=WAL")
         cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute(f"PRAGMA cache_size=-{int(settings.sqlite_cache_mb) * 1024}")
+        cur.execute("PRAGMA temp_store=MEMORY")
     finally:
         cur.close()
 
@@ -512,6 +530,38 @@ def _add_column_if_missing(table: str, column: str, ddl: str) -> None:
             conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+# Composite indexes matching the hot WHERE + ORDER BY shapes. The per-column
+# indexes on the models cover point lookups; these cover the list/paginate
+# queries (tenant slice + sort / cursor). CREATE INDEX IF NOT EXISTS is
+# idempotent and cheap.
+_COMPOSITE_INDEXES = [
+    ("ix_documents_tenant_active_status", "documents", "tenant_id, is_active, status"),
+    ("ix_documents_tenant_scope_owner", "documents", "tenant_id, scope, owner_user_id"),
+    ("ix_query_log_tenant_created", "query_log", "tenant_id, created_at"),
+    ("ix_query_log_tenant_mode", "query_log", "tenant_id, mode"),
+    ("ix_audit_log_tenant_id_desc", "audit_log", "tenant_id, id"),
+    ("ix_audit_log_tenant_action", "audit_log", "tenant_id, action"),
+    ("ix_audit_log_target", "audit_log", "target_type, target_id"),
+    ("ix_activity_log_tenant_id_desc", "activity_log", "tenant_id, id"),
+    ("ix_activity_log_tenant_user_id", "activity_log", "tenant_id, user_id, id"),
+    ("ix_activity_log_tenant_category", "activity_log", "tenant_id, category"),
+    ("ix_refresh_tokens_user_revoked", "refresh_tokens", "user_id, revoked"),
+    ("ix_connector_sync_runs_connector", "connector_sync_runs", "connector_id, started_at"),
+]
+
+
+def _ensure_indexes() -> None:
+    if not _IS_SQLITE:                            # a real DB manages its own indexes / migrations
+        return
+    with engine.begin() as conn:
+        for name, table, cols in _COMPOSITE_INDEXES:
+            try:
+                conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({cols})")
+            except Exception:                     # table may not exist on a partial DB
+                pass
+        conn.exec_driver_sql("PRAGMA optimize")
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
     # Backward-compatible columns added after the first POC build.
@@ -564,6 +614,8 @@ def init_db() -> None:
     _add_column_if_missing("tenants", "status", "status VARCHAR DEFAULT 'active'")
     _add_column_if_missing("tenants", "suspended_at", "suspended_at DATETIME")
     _add_column_if_missing("tenants", "suspended_reason", "suspended_reason VARCHAR DEFAULT ''")
+    # Performance: composite indexes for the list/paginate query shapes.
+    _ensure_indexes()
 
 
 def new_api_key() -> str:

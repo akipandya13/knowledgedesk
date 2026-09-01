@@ -132,6 +132,8 @@ not a single call site.
 | LLM / embeddings | `llm.calls{provider,outcome}`, `llm.generate.seconds`, `llm.response.chars`, `embedding.calls`, `embedding.batch.seconds`, `embedding.batch.texts` | — | — |
 | Dependencies | `dependency.up{dependency}` (db · qdrant · llm), `dependency.check.seconds{dependency}` (probe latency); background loop + `/readyz` + `/api/health` | — | — |
 | Readiness | `app.ready` (0/1, emitted by `/readyz`) | — | — |
+| SLOs | `slo.target.seconds{slo}` · `slo.p95.seconds{slo}` · `slo.compliant{slo}` (0/1) — background probe; `GET /api/observability/slo` for the report ([PERFORMANCE.md](PERFORMANCE.md)) | — | — |
+| Caching / retries | `retry.attempts{op}` · `retry.exhausted{op}` · `idempotency.requests{outcome}` | — | — |
 | Infrastructure / resources | `process.memory.rss.bytes` · `process.memory.vms.bytes` · `process.memory.percent` · `process.cpu.percent` · `process.open_fds` · `process.threads` · `process.uptime.seconds` · `system.cpu.percent` · `system.cpu.count` · `system.memory.percent` · `system.memory.available.bytes` · `system.disk.percent{path}` · `system.disk.free.bytes{path}` · `system.load.average{window}` · `python.gc.objects` · `python.gc.collections{generation}` — refreshed every `OBS_RESOURCE_METRICS_SECONDS` (needs `psutil`; degrades to runtime-only gauges without it) | — | — |
 | Errors | `app.errors{type}` (unhandled), plus `http.server.requests{status_class="5xx"}` for the rate | — | `app.error` |
 | Any span | `span.duration.seconds{span,status}` (so traces yield metrics even with no trace sink) | — | — |
@@ -145,6 +147,7 @@ not a single call site.
 | GET | `/metrics` | none¹ | Prometheus text; only if `prometheus` sink on; `OBS_PROMETHEUS_TOKEN` optional |
 | GET | `/api/observability/config` | `observability.read` | active sinks, sample rate, drop count |
 | GET | `/api/observability/metrics` | `observability.read` | JSON registry snapshot |
+| GET | `/api/observability/slo` | `observability.read` | response-time targets vs. current p50/p95 |
 | GET | `/api/observability/events?kind=&since_seconds=&limit=` | `observability.read` | recent domain events (`sqlite` sink) |
 | GET | `/api/observability/traces/{request_id}` | `observability.read` | spans for one request (`sqlite` sink) |
 

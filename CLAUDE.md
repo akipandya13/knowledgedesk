@@ -39,6 +39,9 @@ Deep reference already written — **use it, keep it current**:
   isolation.
 - [`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md) — `scripts/backup.py` /
   `scripts/restore.py` (DB + keys + Qdrant snapshots) and the DR runbook.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — DB pool + composite indexes +
+  PRAGMAs, `cache.TTLCache` / tenant-config cache, the pooled `http_client`,
+  and response-time targets (`/api/observability/slo`, `slo.*` gauges).
 - [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md) — login/MFA/SSO/sessions/
   API-keys/password-policy and the `sso` subscription entitlement.
 - [`docs/DEPLOYMENT_TLS.md`](docs/DEPLOYMENT_TLS.md) — Caddy TLS termination,
@@ -58,6 +61,8 @@ backend/app/
   main.py            app wiring, startup bootstrap, /livez /readyz /api/health, /api/demo/seed, SPA fallback
   health.py          liveness / readiness / dependency probes (db·qdrant·llm), health_report
   resilience.py      retry_call / aretry_call — backoff + jitter for transient failures
+  cache.py           TTLCache + per-tenant resolve_model_config() memoization
+  http_client.py     shared connection-pooled httpx Client / AsyncClient (LLM, embeddings)
   idempotency.py     Idempotency-Key replay middleware for mutating requests
   timeout_middleware.py  hard per-request ceiling → 504
   recovery.py        startup reconciler: close out work interrupted by a restart
@@ -311,6 +316,20 @@ are turned into a safe correlated 500 + `app.error` by the global handler in
 `main.py` — don't add blanket `try/except: return 500` in routers. New log/event
 store → a **sink** (never a vendor client in app code). See
 [`docs/LOGGING.md`](docs/LOGGING.md).
+
+### Performance
+
+Reach for `http_client.get_client()` / `get_async_client()` (shared pooled) for
+new outbound HTTP — don't `httpx.Client()` per call. Memoize a hot pure-ish
+computation with `cache.TTLCache` (per-process, bounded); if it's per-tenant and
+derived from `settings_json`, key on `(tenant.id, hash(settings_json))` and call
+`invalidate_tenant_config()` on the mutation path (see the model-connector
+handlers). New list/paginate query → add a composite index to
+`_COMPOSITE_INDEXES` in `database.py` matching its `WHERE` + `ORDER BY`. New
+latency-sensitive path → add an SLO row in `observability/slo.py` and an
+`SLO_*_P95_MS` setting. The DB engine honours `DATABASE_URL` (defaults to
+SQLite); SQLite-only PRAGMAs/index bootstrap are dialect-guarded. See
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 
 ### Resilience
 

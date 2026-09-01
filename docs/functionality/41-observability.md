@@ -44,6 +44,7 @@ backend) is chosen by configuration, with no vendor as a hard dependency.
 | GET | `/metrics` | none (optional `OBS_PROMETHEUS_TOKEN`); needs the `prometheus` sink |
 | GET | `/api/observability/config` | `observability.read` |
 | GET | `/api/observability/metrics` | `observability.read` |
+| GET | `/api/observability/slo` | `observability.read` |
 | GET | `/api/observability/events?kind=&since_seconds=&limit=` | `observability.read` |
 | GET | `/api/observability/traces/{request_id}` | `observability.read` |
 

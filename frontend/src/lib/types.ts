@@ -521,6 +521,21 @@ export interface ObsConfig {
   queue_dropped: number;
 }
 
+export interface SloTarget {
+  name: string;
+  metric: string;
+  target_p95_ms: number;
+  p50_ms: number | null;
+  p95_ms: number | null;
+  samples: number;
+  met: boolean;
+}
+
+export interface SloReport {
+  ok: boolean;
+  targets: SloTarget[];
+}
+
 export interface MetricSeries {
   labels: Record<string, string>;
   value?: number;
